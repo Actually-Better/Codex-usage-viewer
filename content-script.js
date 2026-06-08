@@ -120,7 +120,8 @@
   }
 
   function isLikelyUsageText(text) {
-    return /(usage|limit|remaining|resets?|renews?|credits?|codex|gpt-?5\.?5|thinking|plan|billing|plus|pro|team|enterprise)/i.test(text);
+    return ChatGPTUsageModel.matchesUsageTerms(text, ["usage", "remaining", "reset", "credits", "weekly", "hours5"])
+      || /(codex|gpt|thinking|plan|billing|plus|pro|team|enterprise)/i.test(text);
   }
 
   function collectSessionSignals(text) {
@@ -247,27 +248,7 @@
   }
 
   function extractCodexAnalyticsUsage(text) {
-    const normalized = text.replace(/\s+/g, " ").trim();
-    const fields = {};
-
-    fields.codex5h = codexUsageField(normalized, /(?:^|\s)L[ií]mite de uso de 5 horas\s+(\d+)\s*%\s*restante(?:\s+Se reinicia a las\s+((?:\d{1,2}:\d{2})|(?:\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2})))?/i, "5h limit");
-    fields.codexWeekly = codexUsageField(normalized, /(?:^|\s)L[ií]mite de uso semanal\s+(\d+)\s*%\s*restante(?:\s+Se reinicia a las\s+((?:\d{1,2}:\d{2})|(?:\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2})))?/i, "Weekly limit");
-    fields.codexSpark5h = codexUsageField(normalized, /GPT-[\w.\-]+-Codex-Spark\s+L[ií]mite de uso de 5 horas\s+(\d+)\s*%\s*restante(?:\s+Se reinicia a las\s+((?:\d{1,2}:\d{2})|(?:\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2})))?/i, "GPT-5.3-Codex-Spark 5h");
-    fields.codexSparkWeekly = codexUsageField(normalized, /GPT-[\w.\-]+-Codex-Spark\s+L[ií]mite de uso semanal\s+(\d+)\s*%\s*restante(?:\s+Se reinicia a las\s+((?:\d{1,2}:\d{2})|(?:\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2})))?/i, "GPT-5.3-Codex-Spark weekly");
-
-    const credits = normalized.match(/Cr[eé]ditos restantes\s+(\d+)/i);
-    if (credits) {
-      fields.remainingCredits = visibleField(`Credits remaining: ${credits[1]}`, {
-        label: "Credits",
-        remainingCredits: Number(credits[1])
-      });
-      fields.codexCredits = visibleField(`Credits remaining: ${credits[1]}`, {
-        label: "Credits",
-        remainingCredits: Number(credits[1])
-      });
-    }
-
-    return fields;
+    return ChatGPTUsageModel.parseCodexUsageText(text);
   }
 
   function collectCodexAnalyticsDiagnostics(text, usage) {
@@ -277,43 +258,10 @@
       pageDetected: true,
       foundKeys,
       textLength: text.length,
-      hasSaldoText: /Saldo/i.test(text),
-      hasRestanteText: /restante/i.test(text),
-      hasCreditsText: /Cr[eé]ditos restantes/i.test(text)
+      hasResetText: ChatGPTUsageModel.matchesUsageTerms(text, ["reset"]),
+      hasRemainingText: ChatGPTUsageModel.matchesUsageTerms(text, ["remaining"]),
+      hasCreditsText: ChatGPTUsageModel.matchesUsageTerms(text, ["credits"])
     };
-  }
-
-  function codexUsageField(text, pattern, label) {
-    const match = text.match(pattern);
-    if (!match) return unavailableField();
-    const resetText = cleanResetText(match[2]);
-    const reset = resetText ? `; resets ${resetText}` : "";
-    return visibleField(`${label}: ${match[1]}% remaining${reset}`, {
-      label,
-      remainingPercent: Number(match[1]),
-      resetText
-    });
-  }
-
-  function codexVisibleField(label, percent, resetText) {
-    const cleanReset = cleanResetText(resetText);
-    const reset = cleanReset ? `; resets ${cleanReset}` : "";
-    return visibleField(`${label}: ${percent}% remaining${reset}`, {
-      label,
-      remainingPercent: Number(percent),
-      resetText: cleanReset
-    });
-  }
-
-  function cleanResetText(value) {
-    if (!value) return null;
-    const text = String(value).replace(/\s+/g, " ").trim();
-    const shortTime = text.match(/^(\d{1,2}:\d{2})$/);
-    if (shortTime) return shortTime[1];
-    const dateTime = text.match(/^(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2})$/);
-    if (dateTime) return dateTime[1];
-    const embedded = text.match(/(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}|\d{1,2}:\d{2})/);
-    return embedded ? embedded[1] : null;
   }
 
   function visibleField(snippet, structured) {
@@ -373,7 +321,10 @@
 
   function getElementText(element) {
     return String(element.innerText || element.textContent || element.getAttribute("aria-label") || "")
-      .replace(/\s+/g, " ")
+      .split(/\n+/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n")
       .trim();
   }
 })();

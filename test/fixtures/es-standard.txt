@@ -1,0 +1,24 @@
+Uso de Codex
+
+GPT-5.1-Codex
+Limite de uso de 5 horas
+72 % restante
+Se reinicia a las 14:30
+
+GPT-5.1-Codex
+Limite de uso semanal
+18 % restante
+Se reinicia a las 10 junio 2026 09:00
+
+GPT-5.1-Codex-Spark
+Limite de uso de 5 horas
+44 % restante
+Se reinicia a las 16:15
+
+GPT-5.1-Codex-Spark
+Limite de uso semanal
+8 % restante
+Se reinicia a las 10 junio 2026 09:00
+
+Creditos restantes
+123

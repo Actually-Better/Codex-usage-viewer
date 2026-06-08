@@ -1,0 +1,24 @@
+Codex usage
+
+GPT-5.1-Codex
+5-hour usage limit
+64% remaining
+Resets at 2:30 PM
+
+GPT-5.1-Codex
+Weekly usage limit
+12% remaining
+Resets on Jun 10, 2026, 9:00 AM
+
+GPT-5.1-Codex-Spark
+5-hour usage limit
+50% remaining
+Resets at 4:15 PM
+
+GPT-5.1-Codex-Spark
+Weekly usage limit
+7% remaining
+Resets on Jun 10, 2026, 9:00 AM
+
+Credits remaining
+91

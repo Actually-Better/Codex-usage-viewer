@@ -10,10 +10,8 @@
     "128": "icons/icon-128.png"
   },
   "permissions": [
-    "activeTab",
     "alarms",
-    "storage",
-    "tabs"
+    "storage"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -39,6 +37,7 @@
         "https://chat.openai.com/*"
       ],
       "js": [
+        "usage-model.js",
         "content-script.js"
       ],
       "run_at": "document_idle"

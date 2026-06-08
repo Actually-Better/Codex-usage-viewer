@@ -18,8 +18,9 @@
         --warning-bg: #fff6d8;
         --ok: #0f766e;
         --bad: #b42318;
-        --low: #ff6b72;
-        --medium: #f59e0b;
+        --red: #dc2626;
+        --amber: #f59e0b;
+        --green: #16a34a;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -35,8 +36,9 @@
           --warning-bg: #2b2413;
           --ok: #5eead4;
           --bad: #fca5a5;
-          --low: #ff6b72;
-          --medium: #fbbf24;
+          --red: #f87171;
+          --amber: #fbbf24;
+          --green: #22c55e;
         }
       }
 
@@ -216,6 +218,11 @@
         margin: 8px 10px 10px;
       }
 
+      .diagnostics-actions {
+        border-top: 1px solid var(--border);
+        padding: 8px 10px 0;
+      }
+
       .metric-list {
         display: grid;
         gap: 0;
@@ -263,15 +270,18 @@
       .progress-fill {
         height: 100%;
         border-radius: inherit;
-        background: #16a34a;
       }
 
-      .progress-fill.medium {
-        background: var(--medium);
+      .progress-fill.green {
+        background: var(--green);
       }
 
-      .progress-fill.low {
-        background: var(--low);
+      .progress-fill.amber {
+        background: var(--amber);
+      }
+
+      .progress-fill.red {
+        background: var(--red);
       }
 
       .metric-reset {
@@ -328,6 +338,9 @@
       <details>
         <summary>Diagnostics</summary>
         <dl id="diagnosticsSection"></dl>
+        <div class="diagnostics-actions">
+          <button id="copyDiagnosticsButton" type="button">Copy diagnostics</button>
+        </div>
         <div id="warningBox" class="note"></div>
       </details>
 

@@ -3,12 +3,15 @@
 
   const refreshButton = document.getElementById("refreshButton");
   const openUsageButton = document.getElementById("openUsageButton");
+  const copyDiagnosticsButton = document.getElementById("copyDiagnosticsButton");
   const statusTitle = document.getElementById("statusTitle");
   const statusDetail = document.getElementById("statusDetail");
   const warningBox = document.getElementById("warningBox");
+  let latestDiagnostics = null;
 
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
+  copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
 
   renderLoading();
   loadCachedState().then(() => refresh(false));
@@ -119,6 +122,7 @@
     ]);
 
     warningBox.textContent = collectWarnings(snapshot, counters, state).slice(0, 5).join(" ");
+    latestDiagnostics = buildDiagnosticsPayload(state);
   }
 
   function renderLogin(snapshot) {
@@ -157,7 +161,7 @@
   }
 
   function renderMetricCard(field, fallbackTitle) {
-    const structured = normalizeMetricField(field, fallbackTitle);
+    const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
     const card = document.createElement("div");
     card.className = "metric-card";
 
@@ -186,14 +190,8 @@
       progress.className = "progress";
       const fill = document.createElement("div");
       const remainingPercent = Math.max(0, Math.min(100, structured.remainingPercent));
-
-      if (remainingPercent < 15) {
-        fill.className = "progress-fill low";
-      } else if (remainingPercent <= 50) {
-        fill.className = "progress-fill medium";
-      } else {
-        fill.className = "progress-fill";
-      }
+      const usageLevel = ChatGPTUsageModel.getUsageLevel(remainingPercent);
+      fill.className = `progress-fill ${usageLevel || "green"}`;
 
       fill.style.width = `${remainingPercent}%`;
       progress.append(fill);
@@ -230,70 +228,6 @@
     return card;
   }
 
-  function normalizeMetricField(field, fallbackTitle) {
-    const structured = field.structured || {};
-    const value = String(field.value || "");
-    const parsed = parseMetricText(value, fallbackTitle);
-    const structuredLooksContaminated = structured.resetText && /l[ií]mite|cr[eé]ditos|recarga|configuraci[oó]n/i.test(structured.resetText);
-    const shouldPreferParsed = parsed && (
-      fallbackTitle.toLowerCase().includes("codex-spark")
-      || structuredLooksContaminated
-      || typeof structured.remainingPercent !== "number"
-    );
-
-    if (shouldPreferParsed) return parsed;
-
-    if (typeof structured.remainingPercent === "number" || typeof structured.remainingCredits === "number") {
-      return structured;
-    }
-
-    if (parsed) return parsed;
-    return {
-      label: fallbackTitle
-    };
-  }
-
-  function parseMetricText(value, fallbackTitle) {
-    const spark5h = value.match(/Codex-Spark.*?(?:5-hour|5 horas).*?(\d+)\s*%\s*(?:remaining|restante)/i);
-    const sparkWeekly = value.match(/Codex-Spark.*?(?:weekly|semanal).*?(\d+)\s*%\s*(?:remaining|restante)/i);
-    const percent = value.match(/(\d+)\s*%\s*remaining/i);
-    const credits = value.match(/credits?\s+remaining:\s*(\d+)/i);
-    const reset = value.match(/resets\s+(.+)$/i);
-    const resetText = cleanResetText(reset && reset[1]);
-    const title = fallbackTitle.toLowerCase();
-    const selectedPercent = title.includes("codex-spark") && title.includes("5h")
-      ? spark5h
-      : title.includes("codex-spark") && title.includes("weekly")
-        ? sparkWeekly
-        : percent;
-
-    if (selectedPercent) {
-      return {
-        label: fallbackTitle,
-        remainingPercent: Number(selectedPercent[1]),
-        resetText
-      };
-    }
-
-    if (credits) {
-      return {
-        label: fallbackTitle,
-        remainingCredits: Number(credits[1])
-      };
-    }
-
-    return null;
-  }
-
-  function cleanResetText(value) {
-    if (!value) return null;
-    const text = String(value).replace(/\s+/g, " ").trim();
-    const exact = text.match(/^(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}|\d{1,2}:\d{2})$/);
-    if (exact) return exact[1];
-    const embedded = text.match(/(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}|\d{1,2}:\d{2})/);
-    return embedded ? embedded[1] : null;
-  }
-
   function renderVisibleFields(snapshot) {
     if (!snapshot || !snapshot.usage) return "unavailable";
     const labels = {
@@ -315,6 +249,76 @@
       .filter(([, value]) => value)
       .map(([key]) => key);
     return active.length ? escapeHtml(active.join(", ")) : "None detected";
+  }
+
+  async function copyDiagnostics() {
+    const diagnostics = redactDiagnostics(latestDiagnostics || buildDiagnosticsPayload(null));
+    copyDiagnosticsButton.disabled = true;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      copyDiagnosticsButton.textContent = "Copied";
+    } catch {
+      copyDiagnosticsButton.textContent = "Copy failed";
+    } finally {
+      setTimeout(() => {
+        copyDiagnosticsButton.disabled = false;
+        copyDiagnosticsButton.textContent = "Copy diagnostics";
+      }, 1600);
+    }
+  }
+
+  function buildDiagnosticsPayload(state) {
+    const snapshot = state && state.snapshot;
+    const counters = state && state.counters;
+    return {
+      extension: "Codex Usage Viewer",
+      diagnosticSchema: 1,
+      status: state && state.status ? state.status : null,
+      popupStatus: statusTitle ? statusTitle.textContent : null,
+      extractorVersion: snapshot && snapshot.extractorVersion ? snapshot.extractorVersion : null,
+      pageDetected: snapshot ? {
+        hostname: snapshot.hostname || null,
+        pathCategory: snapshot.pathCategory || snapshot.pageKind || null
+      } : null,
+      loginStatus: snapshot && snapshot.loginStatus ? snapshot.loginStatus : null,
+      usageSignalsFound: snapshot && snapshot.sessionSignals ? truthyKeys(snapshot.sessionSignals) : [],
+      visibleFieldsFound: visibleFieldKeys(snapshot),
+      codexAnalytics: snapshot && snapshot.codexAnalytics ? {
+        pageDetected: Boolean(snapshot.codexAnalytics.pageDetected),
+        foundKeys: snapshot.codexAnalytics.foundKeys || [],
+        hasResetText: Boolean(snapshot.codexAnalytics.hasResetText),
+        hasRemainingText: Boolean(snapshot.codexAnalytics.hasRemainingText),
+        hasCreditsText: Boolean(snapshot.codexAnalytics.hasCreditsText)
+      } : null,
+      localTrackingActive: Boolean(counters && counters.localTrackingActive),
+      lastRefreshAt: state && state.lastRefreshAt ? state.lastRefreshAt : null,
+      collectedAt: snapshot && snapshot.collectedAt ? snapshot.collectedAt : null,
+      storage: "chrome.storage.local only",
+      network: "no third-party requests"
+    };
+  }
+
+  function redactDiagnostics(value) {
+    return JSON.parse(JSON.stringify(value), (_key, item) => {
+      if (typeof item !== "string") return item;
+      return item
+        .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+        .replace(/\b(?:acct|account|user|org|workspace|team)_[A-Za-z0-9_-]+\b/g, "[redacted-id]");
+    });
+  }
+
+  function truthyKeys(record) {
+    return Object.entries(record || {})
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
+  }
+
+  function visibleFieldKeys(snapshot) {
+    if (!snapshot || !snapshot.usage) return [];
+    return Object.entries(snapshot.usage)
+      .filter(([, field]) => field && field.value)
+      .map(([key]) => key);
   }
 
   function collectWarnings(snapshot, counters, state) {

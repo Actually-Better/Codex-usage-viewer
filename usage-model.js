@@ -8,29 +8,28 @@
     },
     refreshAlarmName: "chatgpt-usage-monitor-refresh",
     refreshPeriodMinutes: 15,
-    limits: {
-      gpt55ShortWindow: {
-        label: "GPT-5.5 short window",
-        maxMessages: null,
-        windowsHours: [3, 5]
-      },
-      gpt55ThinkingWeekly: {
-        label: "GPT-5.5 Thinking weekly",
-        maxMessages: null,
-        windowDays: 7
-      },
-      codexCredits: {
-        label: "Codex / Credits",
-        maxCredits: null,
-        windowsHours: [5],
-        windowDays: 7
-      }
-    },
     counterRetentionDays: 14
   };
 
   const ONE_HOUR_MS = 60 * 60 * 1000;
   const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+  const CODEX_FIELD_KEYS = [
+    "codex5h",
+    "codexWeekly",
+    "codexSpark5h",
+    "codexSparkWeekly",
+    "codexCredits",
+    "remainingCredits"
+  ];
+  const TERMS = {
+    usage: ["usage", "use", "uso"],
+    remaining: ["remaining", "left", "available", "restante", "restantes", "queda", "quedan", "disponible", "disponibles"],
+    reset: ["reset", "resets", "renew", "renews", "refresh", "refreshes", "reinicia", "reinicio", "renueva", "recarga"],
+    credits: ["credit", "credits", "credit balance", "credito", "creditos", "saldo"],
+    weekly: ["weekly", "week", "semanal", "semana"],
+    hours5: ["5h", "5 h", "5-hour", "5 hour", "5 hours", "five hour", "five-hour", "5 horas", "5 hora"]
+  };
+  const CONCEPT_PATTERNS = buildConceptPatterns(TERMS);
 
   function nowIso(now = Date.now()) {
     return new Date(now).toISOString();
@@ -53,11 +52,7 @@
       installed_at: nowIso(now),
       tracking_started_at: null,
       localTrackingActive: false,
-      events: [],
-      manual_remaining: null,
-      manual_remaining_source: null,
-      manual_remaining_updated_at: null,
-      limit_reached_at: null
+      events: []
     }, now);
   }
 
@@ -107,11 +102,7 @@
         messages_weekly: messagesWeekly.resetAt ? nowIso(messagesWeekly.resetAt) : null,
         codex_5h: codex5h.resetAt ? nowIso(codex5h.resetAt) : null,
         codex_weekly: codexWeekly.resetAt ? nowIso(codexWeekly.resetAt) : null
-      },
-      manual_remaining: normalizeManualRemaining(base.manual_remaining),
-      manual_remaining_source: base.manual_remaining_source || null,
-      manual_remaining_updated_at: base.manual_remaining_updated_at || null,
-      limit_reached_at: base.limit_reached_at || null
+      }
     };
   }
 
@@ -131,42 +122,6 @@
         }
       ]
     }, now);
-  }
-
-  function resetLocalCounters(counters, now = Date.now()) {
-    const current = normalizeCounters(counters, now);
-    return normalizeCounters({
-      ...current,
-      tracking_started_at: nowIso(now),
-      localTrackingActive: true,
-      events: []
-    }, now);
-  }
-
-  function setManualRemaining(counters, value, now = Date.now()) {
-    const current = normalizeCounters(counters, now);
-    return normalizeCounters({
-      ...current,
-      manual_remaining: normalizeManualRemaining(value),
-      manual_remaining_source: "user-entered",
-      manual_remaining_updated_at: nowIso(now),
-      limit_reached_at: null
-    }, now);
-  }
-
-  function markLimitReached(counters, now = Date.now()) {
-    const current = normalizeCounters(counters, now);
-    return normalizeCounters({
-      ...current,
-      manual_remaining: 0,
-      manual_remaining_source: "user-entered",
-      manual_remaining_updated_at: nowIso(now),
-      limit_reached_at: nowIso(now)
-    }, now);
-  }
-
-  function buildEstimate(counters, now = Date.now()) {
-    return normalizeCounters(counters, now);
   }
 
   function rollingWindow(items, windowMs, now = Date.now()) {
@@ -192,16 +147,77 @@
     return Number.isNaN(parsed) ? null : parsed;
   }
 
-  function normalizeManualRemaining(value) {
-    if (value === null || value === undefined || value === "") return null;
-    const number = Number(value);
-    if (!Number.isFinite(number) || number < 0) return null;
-    return Math.floor(number);
-  }
-
   function hasVisibleUsage(snapshot) {
     if (!snapshot || !snapshot.usage) return false;
     return Object.values(snapshot.usage).some((field) => field && field.value);
+  }
+
+  function parseCodexUsageText(text) {
+    const normalized = normalizeVisibleText(text);
+    const fields = {};
+
+    for (const key of CODEX_FIELD_KEYS) {
+      fields[key] = unavailableField();
+    }
+
+    if (!normalized) return fields;
+
+    for (const match of collectPercentWindows(normalized)) {
+      const key = classifyCodexPercentWindow(match);
+      if (!key || fields[key].value) continue;
+      fields[key] = visibleField(formatPercentValue(key, match.percent, match.resetText), {
+        label: labelForMetricKey(key),
+        remainingPercent: match.percent,
+        resetText: match.resetText,
+        confidence: match.confidence,
+        resetConfidence: match.resetText ? match.resetConfidence : null
+      }, match.confidence);
+    }
+
+    const credits = extractCredits(normalized);
+    if (credits) {
+      const field = visibleField(`Credits remaining: ${credits.value}`, {
+        label: "Credits",
+        remainingCredits: credits.value,
+        confidence: credits.confidence
+      }, credits.confidence);
+      fields.codexCredits = field;
+      fields.remainingCredits = field;
+    }
+
+    return fields;
+  }
+
+  function normalizeMetricField(field, fallbackTitle) {
+    const structured = field && field.structured ? field.structured : {};
+    const value = String(field && field.value ? field.value : "");
+    const parsed = parseMetricText(value, fallbackTitle);
+    const resetContext = normalizeForMatch(structured.resetText || "");
+    const structuredLooksContaminated = structured.resetText
+      && (hasAnyConcept(resetContext, ["usage", "credits", "reset"]) || containsTerm(resetContext, "settings") || containsTerm(resetContext, "configuracion"));
+    const shouldPreferParsed = parsed && (
+      String(fallbackTitle || "").toLowerCase().includes("codex-spark")
+      || structuredLooksContaminated
+      || typeof structured.remainingPercent !== "number"
+    );
+
+    if (shouldPreferParsed) return parsed;
+
+    if (typeof structured.remainingPercent === "number" || typeof structured.remainingCredits === "number") {
+      return structured;
+    }
+
+    if (parsed) return parsed;
+    return {
+      label: fallbackTitle
+    };
+  }
+
+  function getUsageLevel(remainingPercent) {
+    if (typeof remainingPercent !== "number" || !Number.isFinite(remainingPercent)) return null;
+    if (remainingPercent < 15) return "red";
+    if (remainingPercent <= 50) return "amber";
+    return "green";
   }
 
   function summarizeAvailability(snapshot) {
@@ -212,17 +228,277 @@
     return "Ready";
   }
 
-  globalScope.ChatGPTUsageConfig = CONFIG;
-  globalScope.ChatGPTUsageModel = {
+  function collectPercentWindows(text) {
+    if (text.includes("\n")) {
+      return collectLinePercentWindows(text);
+    }
+
+    const matches = [];
+    const pattern = /(\d{1,3})\s*%|([a-záéíóúñ -]{1,28})\s+(\d{1,3})\s*%/gi;
+    let match = pattern.exec(text);
+    while (match) {
+      const percent = Number(match[1] || match[3]);
+      if (Number.isFinite(percent) && percent >= 0 && percent <= 100) {
+        const start = Math.max(0, match.index - 120);
+        const end = Math.min(text.length, pattern.lastIndex);
+        const resetEnd = Math.min(text.length, pattern.lastIndex + 140);
+        const window = text.slice(start, end);
+        matches.push({
+          percent,
+          window,
+          confidence: scorePercentConfidence(match[0], window),
+          resetText: extractResetText(text.slice(match.index, resetEnd)),
+          resetConfidence: "medium"
+        });
+      }
+      match = pattern.exec(text);
+    }
+    return matches;
+  }
+
+  function collectLinePercentWindows(text) {
+    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    const matches = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const percentMatch = extractPercent(lines[index]);
+      const percent = percentMatch && percentMatch.percent;
+      if (typeof percent !== "number") continue;
+      const start = Math.max(0, index - 3);
+      const end = Math.min(lines.length, index + 4);
+      const window = lines.slice(start, index + 1).join("\n");
+      const confidenceWindow = lines.slice(start, end).join("\n");
+      const resetText = extractResetText(lines.slice(index, end).join(" "));
+      matches.push({
+        percent,
+        line: lines[index],
+        window,
+        confidence: scorePercentConfidence(lines[index], confidenceWindow),
+        resetText,
+        resetConfidence: resetText ? "medium" : null
+      });
+    }
+    return matches;
+  }
+
+  function extractPercent(value) {
+    const match = String(value || "").match(/(\d{1,3})\s*%/);
+    if (!match) return null;
+    const percent = Number(match[1]);
+    return Number.isFinite(percent) && percent >= 0 && percent <= 100
+      ? { percent, confidence: scorePercentConfidence(value, value) }
+      : null;
+  }
+
+  function classifyCodexPercentWindow(match) {
+    const normalized = normalizeForMatch(match.window);
+    if (!hasAnyConcept(normalized, ["usage", "remaining"]) && !containsTerm(normalized, "codex")) return null;
+
+    const hasSpark = containsTerm(normalized, "spark");
+    const fiveHourIndex = lastConceptIndex(normalized, "hours5");
+    const weeklyIndex = lastConceptIndex(normalized, "weekly");
+    const hasFiveHour = fiveHourIndex >= 0;
+    const hasWeekly = weeklyIndex >= 0;
+    const fiveHourIsClosest = hasFiveHour && (!hasWeekly || fiveHourIndex > weeklyIndex);
+    const weeklyIsClosest = hasWeekly && (!hasFiveHour || weeklyIndex > fiveHourIndex);
+
+    if (hasSpark && fiveHourIsClosest) return "codexSpark5h";
+    if (hasSpark && weeklyIsClosest) return "codexSparkWeekly";
+    if (!hasSpark && fiveHourIsClosest) return "codex5h";
+    if (!hasSpark && weeklyIsClosest) return "codexWeekly";
+    return null;
+  }
+
+  function lastRegexIndex(value, pattern) {
+    let lastIndex = -1;
+    pattern.lastIndex = 0;
+    let match = pattern.exec(value);
+    while (match) {
+      lastIndex = match.index;
+      match = pattern.exec(value);
+    }
+    return lastIndex;
+  }
+
+  function lastConceptIndex(value, concept) {
+    return Math.max(...CONCEPT_PATTERNS[concept].map((pattern) => lastRegexIndex(value, pattern)));
+  }
+
+  function extractCredits(text) {
+    const lines = text.includes("\n")
+      ? text.split("\n").map((line) => line.trim()).filter(Boolean)
+      : text.split(/(?=\b(?:credits?|credit balance|cr[eé]ditos?|saldo)\b)|(?<=\d)\s+/i).map((line) => line.trim()).filter(Boolean);
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const currentLine = lines[index];
+      const currentNormalized = normalizeForMatch(currentLine);
+      if (!hasConcept(currentNormalized, "credits")) continue;
+      const window = lines.slice(index, Math.min(lines.length, index + 2)).join(" ");
+      const normalized = normalizeForMatch(window);
+      const numberMatch = window.match(/\b(\d{1,9})\b/);
+      if (!numberMatch) continue;
+      const value = Number(numberMatch[1]);
+      if (!Number.isFinite(value) || value < 0) continue;
+      return {
+        value: Math.floor(value),
+        confidence: hasConcept(normalized, "remaining") ? "high" : "low"
+      };
+    }
+    return null;
+  }
+
+  function extractResetText(text) {
+    const match = normalizeVisibleText(text).match(/(?:resets?|renews?|refresh(?:es)?|reset|reinicia|reinicio|renueva|recarga)(?:\s+(?:at|on|a las|el|en))?\s+(.{1,80})/i);
+    if (!match) return null;
+    return cleanResetText(match[1]);
+  }
+
+  function parseMetricText(value, fallbackTitle) {
+    const title = normalizeForMatch(fallbackTitle || "");
+    const fields = parseCodexUsageText(`${fallbackTitle || ""} ${value || ""}`);
+    const key = containsTerm(title, "spark") && hasConcept(title, "hours5")
+      ? "codexSpark5h"
+      : containsTerm(title, "spark") && hasConcept(title, "weekly")
+        ? "codexSparkWeekly"
+        : hasConcept(title, "weekly")
+          ? "codexWeekly"
+          : hasConcept(title, "credits")
+            ? "codexCredits"
+            : "codex5h";
+    const parsed = fields[key];
+    return parsed && parsed.structured ? parsed.structured : null;
+  }
+
+  function formatPercentValue(key, percent, resetText) {
+    const reset = resetText ? `; resets ${resetText}` : "";
+    return `${labelForMetricKey(key)}: ${percent}% remaining${reset}`;
+  }
+
+  function labelForMetricKey(key) {
+    const labels = {
+      codex5h: "5h limit",
+      codexWeekly: "Weekly limit",
+      codexSpark5h: "Codex-Spark 5h",
+      codexSparkWeekly: "Codex-Spark weekly",
+      codexCredits: "Credits",
+      remainingCredits: "Credits"
+    };
+    return labels[key] || key;
+  }
+
+  function cleanResetText(value) {
+    if (!value) return null;
+    const text = String(value)
+      .replace(/\s+/g, " ")
+      .replace(/[.;|].*$/, "")
+      .trim();
+    const patterns = [
+      /^(\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
+      /^(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
+      /^([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4},?\s+\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
+      /(\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) return match[1].trim();
+    }
+    return null;
+  }
+
+  function visibleField(snippet, structured, confidence = "medium") {
+    const compact = String(snippet || "").replace(/\s+/g, " ").trim();
+    return {
+      value: compact.slice(0, 180),
+      confidence,
+      structured: structured || null,
+      warning: "Read from public UI text; exact endpoint data was not used."
+    };
+  }
+
+  function unavailableField() {
+    return {
+      value: null,
+      confidence: "unavailable",
+      warning: "Usage not exposed by ChatGPT UI"
+    };
+  }
+
+  function normalizeVisibleText(value) {
+    return String(value || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t\r\f\v]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
+  }
+
+  function normalizeForMatch(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  }
+
+  function scorePercentConfidence(percentText, windowText) {
+    const percentContext = normalizeForMatch(percentText);
+    const window = normalizeForMatch(windowText);
+    if (/\d{1,3}\s*%/.test(percentContext)) return "high";
+    if (hasConcept(window, "remaining")) return "medium";
+    return "low";
+  }
+
+  function hasAnyConcept(value, concepts) {
+    return concepts.some((concept) => hasConcept(value, concept));
+  }
+
+  function hasConcept(value, concept) {
+    return CONCEPT_PATTERNS[concept].some((pattern) => {
+      pattern.lastIndex = 0;
+      return pattern.test(value);
+    });
+  }
+
+  function containsTerm(value, term) {
+    return new RegExp(`\\b${escapeRegExp(normalizeForMatch(term))}\\b`, "i").test(value);
+  }
+
+  function matchesUsageTerms(value, concepts) {
+    const normalized = normalizeForMatch(value);
+    return concepts.some((concept) => hasConcept(normalized, concept));
+  }
+
+  function buildConceptPatterns(terms) {
+    const patterns = {};
+    for (const [concept, values] of Object.entries(terms)) {
+      patterns[concept] = values.map((term) => new RegExp(`\\b${escapeRegExp(normalizeForMatch(term)).replace(/\\ /g, "\\s+")}\\b`, "g"));
+    }
+    return patterns;
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  const api = {
+    TERMS,
     addLocalMessage,
-    buildEstimate,
     defaultCounters,
     formatTime,
+    getUsageLevel,
     hasVisibleUsage,
-    markLimitReached,
+    matchesUsageTerms,
     normalizeCounters,
-    resetLocalCounters,
-    setManualRemaining,
+    normalizeMetricField,
+    parseCodexUsageText,
     summarizeAvailability
   };
-})(typeof self !== "undefined" ? self : window);
+
+  globalScope.ChatGPTUsageConfig = CONFIG;
+  globalScope.ChatGPTUsageModel = api;
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      ChatGPTUsageConfig: CONFIG,
+      ChatGPTUsageModel: api
+    };
+  }
+})(typeof self !== "undefined" ? self : globalThis);

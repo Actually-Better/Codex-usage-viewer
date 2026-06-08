@@ -40,21 +40,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "usage:setManualRemaining") {
-    getPopupState().then(sendResponse);
-    return true;
-  }
-
-  if (message.type === "usage:resetCounters") {
-    getPopupState().then(sendResponse);
-    return true;
-  }
-
-  if (message.type === "usage:markLimitReached") {
-    getPopupState().then(sendResponse);
-    return true;
-  }
-
   if (message.type === "usage:refresh") {
     withTimeout(refreshForPopup(), 12000, "Refresh timed out.").then(sendResponse);
     return true;
@@ -128,10 +113,6 @@ async function openCodexAnalyticsPage() {
     active: true
   });
   return { ok: true, tabId: tab.id };
-}
-
-async function refreshFromAnyChatGptTab(reason) {
-  return refreshFromExistingChatGptTab(reason);
 }
 
 async function refreshFromExistingChatGptTab(reason) {
@@ -321,15 +302,6 @@ async function withTimeout(promise, ms, message) {
     return { ok: false, state, error: state.diagnostic };
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
-  }
-}
-
-function isChatGptUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname === "chatgpt.com" || parsed.hostname === "chat.openai.com";
-  } catch {
-    return false;
   }
 }
 
