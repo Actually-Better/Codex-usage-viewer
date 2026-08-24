@@ -86,7 +86,10 @@
     latestRefreshTimestamp = state && (state.dataCollectedAt || state.lastRefreshAt);
     updateRefreshAge();
 
-    if (state && state.status === "sign-in-required") {
+    if (state && state.status === "sign-in-required-manual-refresh") {
+      statusTitle.textContent = "Sign in required";
+      statusDetail.textContent = "Click Refresh to open Analytics, then sign in through ChatGPT.";
+    } else if (state && state.status === "sign-in-required") {
       statusTitle.textContent = "Sign in required";
       statusDetail.textContent = "The Analytics tab was left open so you can sign in through ChatGPT, then refresh again.";
     } else if (snapshot && snapshot.loginStatus === "logged-out") {
@@ -379,6 +382,9 @@
     }
     if (state && state.status === "sign-in-required") {
       warnings.push("The temporary Analytics tab remains open only so you can sign in safely through ChatGPT.");
+    }
+    if (state && state.status === "sign-in-required-manual-refresh") {
+      warnings.push("The scheduled sign-in tab was closed; use Refresh to reopen it without periodic focus changes.");
     }
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");

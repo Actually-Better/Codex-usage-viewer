@@ -184,7 +184,6 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
 
     if (!temporaryTab && result.fresh === false && result.pageLoginStatus !== "logged-out") {
       const responsiveResult = result;
-      await markRefreshStarted(`${reason}-temporary-fallback`);
       failureStage = "create-temporary";
       try {
         analyticsTab = await createTemporaryAnalyticsTab();
@@ -203,6 +202,11 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     keepTemporaryTab = temporaryTab
       && result.pageLoginStatus === "logged-out"
       && refreshContext.popupRequested;
+    if (temporaryTab
+      && result.pageLoginStatus === "logged-out"
+      && !refreshContext.popupRequested) {
+      result = await markManualSignInRequired(result);
+    }
     if (keepTemporaryTab && chrome.tabs.update) {
       await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
     }
@@ -246,13 +250,25 @@ async function preserveResponsiveResult(result, fallbackError, failureStage) {
   const fallbackAction = failureStage === "read"
     ? "could not be read"
     : "could not be created";
+  const stored = await chrome.storage.local.get([storageKeys.state]);
+  const currentState = stored[storageKeys.state] || result.state;
   const state = {
-    ...result.state,
-    diagnostic: `${result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback ${fallbackAction}.`,
+    ...currentState,
+    diagnostic: `${currentState.diagnostic || result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback ${fallbackAction}.`,
     fallbackDiagnostic: String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError)
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
   return { ...result, state, fallbackFailed: true };
+}
+
+async function markManualSignInRequired(result) {
+  const state = {
+    ...result.state,
+    status: "sign-in-required-manual-refresh",
+    diagnostic: "The scheduled Analytics tab required sign-in and was closed without taking focus."
+  };
+  await chrome.storage.local.set({ [storageKeys.state]: state });
+  return { ...result, state };
 }
 
 async function markRefreshStarted(reason) {
@@ -340,7 +356,7 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
 
 async function waitForTabReadyOrDelay(tabId) {
   try {
-    await withTimeout(waitForTabComplete(tabId), ANALYTICS_LOAD_TIMEOUT_MS, "Timed out loading Codex Analytics.");
+    await waitForTabComplete(tabId);
   } catch {
     await delay(1000);
   }

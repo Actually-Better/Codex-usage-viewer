@@ -8,6 +8,7 @@ All notable user-facing changes are documented here.
 - Keep an optional **Visit Analytics** button for explicit user navigation without making it a refresh prerequisite.
 - When manual refresh cannot obtain metrics from an existing Analytics page, retry automatically in a newly created temporary inactive page.
 - Give 15-minute refreshes the same real temporary-tab fallback when Analytics is closed, fails, or returns no metrics.
+- Close scheduled sign-in tabs without stealing focus, preserve newer content-script snapshots during fallback failures, and guide the user to manual refresh when authentication is required.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.

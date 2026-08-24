@@ -205,7 +205,7 @@ test("a periodic logged-out refresh closes its temporary tab without stealing fo
   const result = await harness.run('refreshOnce("alarm")');
 
   assert.equal(result.ok, true);
-  assert.equal(result.state.status, "sign-in-required");
+  assert.equal(result.state.status, "sign-in-required-manual-refresh");
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.update, 0);
   assert.equal(harness.calls.remove, 1);
@@ -435,6 +435,71 @@ test("failure to read an optional fallback preserves the responsive incomplete r
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 1);
+});
+
+test("fallback preservation keeps a newer content snapshot stored during the retry", async () => {
+  const cached = visibleSnapshot();
+  const newerSnapshot = {
+    ...visibleSnapshot(),
+    collectedAt: "2026-08-24T10:05:00.000Z",
+    usage: {
+      codex5h: { value: "5h limit: 58% remaining" }
+    }
+  };
+  const emptySnapshot = {
+    status: "ok",
+    hostname: "chatgpt.com",
+    pathCategory: "codex",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  };
+  let harness;
+  let newerSnapshotStored = false;
+  harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot(_callNumber, tabId) {
+      if (tabId === 42) return emptySnapshot;
+      if (!newerSnapshotStored) {
+        newerSnapshotStored = true;
+        harness.storage[ChatGPTUsageConfig.storageKeys.state] = {
+          status: "usage-current",
+          snapshot: newerSnapshot,
+          dataCollectedAt: newerSnapshot.collectedAt,
+          lastRefreshAt: newerSnapshot.collectedAt
+        };
+      }
+      throw new Error("Temporary reader unavailable");
+    },
+    initialState: { snapshot: cached, dataCollectedAt: cached.collectedAt }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fallbackFailed, true);
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(result.state.snapshot.usage.codex5h.value, "5h limit: 58% remaining");
+  assert.equal(result.state.dataCollectedAt, newerSnapshot.collectedAt);
+  assert.match(result.state.diagnostic, /optional temporary fallback could not be read/i);
+  assert.equal(harness.calls.remove, 1);
+});
+
+test("a recoverable tab-readiness timeout does not overwrite refresh state", async () => {
+  const initialState = {
+    status: "analytics-no-new-data",
+    diagnostic: "Analytics responded without new metrics."
+  };
+  const harness = createBackgroundHarness({ initialState });
+  harness.context.chrome.tabs.get = async () => new Promise(() => {});
+
+  await harness.run("waitForTabReadyOrDelay(42)");
+
+  assert.deepEqual(
+    harness.storage[ChatGPTUsageConfig.storageKeys.state],
+    initialState
+  );
 });
 
 test("refresh waits for late usage cards before saving the page snapshot", async () => {

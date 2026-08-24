@@ -104,7 +104,7 @@ When a value cannot be found from visible text, the extension leaves that metric
 - Click **Refresh** from any page. You do not need to open Analytics first.
 - Click **Visit Analytics** only when you want to inspect the source page yourself; it is optional for refresh.
 - A manual refresh reuses a working Analytics page or automatically falls back to a temporary inactive tab when data cannot be obtained. The temporary tab is closed after reading; if sign-in is required, it remains open and is activated so you can sign in through ChatGPT.
-- The 15-minute periodic check uses the same recovery path: it reuses a working Analytics page or creates a real temporary inactive tab when Analytics is closed, fails, or returns no metrics.
+- The 15-minute periodic check uses the same recovery path: it reuses a working Analytics page or creates a real temporary inactive tab when Analytics is closed, fails, or returns no metrics. If that scheduled tab requires sign-in, it is closed without taking focus and the popup asks you to run a manual refresh.
 - Each page attempt samples Analytics every 400 ms for up to 10 seconds. A fallback can therefore extend the full refresh, whose timeout is 45 seconds. The reader observes at least 13 reads after the first metric and requires five stable merged reads before accepting the snapshot. Metrics found in different reads are accumulated instead of replacing one another.
 - The main status shows a friendly age such as **Last refresh: 5 min ago**. Diagnostics retain the exact collection and attempt timestamps.
 - Open **Diagnostics** only when troubleshooting. It shows extractor version, page detection, visible fields, and local refresh timing.
