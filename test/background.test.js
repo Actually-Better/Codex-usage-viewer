@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, initialState = {} } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {} } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1)
@@ -40,6 +40,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       async create(args) {
         calls.create += 1;
         calls.createArgs.push(args);
+        if (createError) throw createError;
         return { id: 99, url: args.url, status: "complete" };
       },
       async remove(tabId) {
@@ -303,6 +304,34 @@ test("refresh failure requires both the existing and temporary Analytics readers
   assert.equal(harness.calls.sendMessage, 50);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 1);
+});
+
+test("failure to create the fallback tab is reported as a real load failure", async () => {
+  const cached = visibleSnapshot();
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-in",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    },
+    createError: new Error("Tabs cannot be created"),
+    initialState: { snapshot: cached, dataCollectedAt: cached.collectedAt }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.state.status, "codex-analytics-load-failed");
+  assert.match(result.state.diagnostic, /could not create the temporary/i);
+  assert.match(result.error, /Tabs cannot be created/);
+  assert.deepEqual(result.state.snapshot, cached);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.remove, 0);
 });
 
 test("refresh waits for late usage cards before saving the page snapshot", async () => {

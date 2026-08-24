@@ -154,12 +154,14 @@ async function refreshFromAnalyticsPage(reason) {
   let analyticsTab = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
   let temporaryTab = false;
   let keepTemporaryTab = false;
+  let failureStage = analyticsTab ? "read-existing" : "create-temporary";
 
   await markRefreshStarted(reason);
   try {
     if (!analyticsTab) {
       analyticsTab = await createTemporaryAnalyticsTab();
       temporaryTab = true;
+      failureStage = "read-temporary";
     }
 
     let result;
@@ -168,15 +170,19 @@ async function refreshFromAnalyticsPage(reason) {
     } catch (error) {
       if (temporaryTab) throw error;
       await markRefreshStarted(`${reason}-temporary-fallback`);
+      failureStage = "create-temporary";
       analyticsTab = await createTemporaryAnalyticsTab();
       temporaryTab = true;
+      failureStage = "read-temporary";
       result = await readAnalyticsTab(analyticsTab.id);
     }
 
     if (!temporaryTab && result.fresh === false) {
       await markRefreshStarted(`${reason}-temporary-fallback`);
+      failureStage = "create-temporary";
       analyticsTab = await createTemporaryAnalyticsTab();
       temporaryTab = true;
+      failureStage = "read-temporary";
       result = await readAnalyticsTab(analyticsTab.id);
     }
 
@@ -187,14 +193,17 @@ async function refreshFromAnalyticsPage(reason) {
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+    const tabCreationFailed = failureStage === "create-temporary";
     const state = {
       ...(data[storageKeys.state] || {}),
-      status: analyticsTab ? "content-script-unavailable" : "codex-analytics-load-failed",
+      status: tabCreationFailed ? "codex-analytics-load-failed" : "content-script-unavailable",
       counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
       lastRefreshAttemptAt: new Date().toISOString(),
-      diagnostic: analyticsTab
-        ? "The Codex Analytics page did not respond to the extension after loading."
-        : "The extension could not create the temporary Codex Analytics tab."
+      diagnostic: tabCreationFailed
+        ? "The extension could not create the temporary Codex Analytics tab."
+        : failureStage === "read-temporary"
+          ? "The temporary Codex Analytics page did not respond after loading."
+          : "The existing Codex Analytics page did not respond after loading."
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
