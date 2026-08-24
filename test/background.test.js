@@ -15,7 +15,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   };
   const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
   const listeners = {};
+  const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
+  const tabRemovedListeners = new Set();
   let alarmExists = existingAlarm;
   let openTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
@@ -68,6 +70,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         calls.remove += 1;
         calls.removedTabIds.push(tabId);
         openTabs = openTabs.filter((tab) => tab.id !== tabId);
+        for (const listener of tabRemovedListeners) listener(tabId, { isWindowClosing: false });
       },
       async update(tabId, args) {
         calls.update += 1;
@@ -94,12 +97,16 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         return { ...tab };
       },
       onUpdated: {
-        addListener() {},
-        removeListener() {}
+        addListener(listener) { tabUpdatedListeners.add(listener); },
+        removeListener(listener) { tabUpdatedListeners.delete(listener); }
       },
       onActivated: {
         addListener(listener) { tabActivatedListeners.add(listener); },
         removeListener(listener) { tabActivatedListeners.delete(listener); }
+      },
+      onRemoved: {
+        addListener(listener) { tabRemovedListeners.add(listener); },
+        removeListener(listener) { tabRemovedListeners.delete(listener); }
       }
     }
   };
@@ -130,7 +137,10 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     },
     setTabUrl(tabId, url) {
       const tab = openTabs.find((candidate) => candidate.id === tabId);
-      if (tab) tab.url = url;
+      if (tab) {
+        tab.url = url;
+        for (const listener of tabUpdatedListeners) listener(tabId, { url }, { ...tab });
+      }
     },
     run(expression) {
       return vm.runInContext(expression, context);
@@ -606,7 +616,7 @@ test("a popup joining a periodic logged-out refresh keeps the temporary tab for 
   assert.equal(harness.calls.remove, 0);
 });
 
-test("a popup joining an alarm replaces an older retained sign-in tab", async () => {
+test("a popup joining an alarm keeps the older retained sign-in tab", async () => {
   const harness = createBackgroundHarness({
     tabs: [
       { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
@@ -628,12 +638,49 @@ test("a popup joining an alarm replaces an older retained sign-in tab", async ()
 
   assert.equal(results[1].state.status, "sign-in-required");
   assert.equal(harness.calls.create, 1);
-  assert.deepEqual(harness.calls.removedTabIds, [42]);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 42);
   assert.equal(
     harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
     1
   );
+});
+
+test("adopting an older retained tab during replacement preserves it as user-owned", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" },
+      { id: 99, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    retainedSignInTabId: 42
+  });
+  const originalGet = harness.context.chrome.tabs.get;
+  let releasePreviousRead;
+  let signalPreviousRead;
+  const previousReadStarted = new Promise((resolve) => { signalPreviousRead = resolve; });
+  const previousReadReleased = new Promise((resolve) => { releasePreviousRead = resolve; });
+  harness.context.chrome.tabs.get = async (tabId) => {
+    const tab = await originalGet(tabId);
+    if (tabId === 42) {
+      signalPreviousRead();
+      await previousReadReleased;
+    }
+    return tab;
+  };
+
+  const replacement = harness.run("retainOnlySignInTab(99)");
+  await previousReadStarted;
+  await harness.setActiveTab(42);
+  await harness.setActiveTab(17);
+  releasePreviousRead();
+  const retainedTabId = await replacement;
+
+  assert.equal(retainedTabId, 99);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.deepEqual(harness.calls.removedTabIds, []);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 99), true);
 });
 
 test("a popup joining during the scheduled sign-in write still keeps the temporary tab", async () => {

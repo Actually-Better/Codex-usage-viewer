@@ -18,6 +18,7 @@ All notable user-facing changes are documented here.
 - Release retained-tab ownership whenever its tab is activated between refreshes, and do not reacquire ownership after activation during a read.
 - Keep activation tracking installed through asynchronous cleanup so last-moment adoption cannot be missed.
 - Serialize retained-tab ownership updates so a stale release cannot erase a concurrently retained replacement.
+- Prefer an existing retained sign-in tab over a newly created duplicate, and preserve it if the user adopts it while its ownership is being checked.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.

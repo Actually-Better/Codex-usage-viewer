@@ -11,6 +11,7 @@ const REFRESH_TIMEOUT_MS = 45000;
 let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
 let retainedSignInTabUpdate = Promise.resolve();
+const adoptedAnalyticsTabIds = new Set();
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureRefreshAlarm();
@@ -34,8 +35,21 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   if (activeInfo && Number.isInteger(activeInfo.tabId)) {
+    adoptedAnalyticsTabIds.add(activeInfo.tabId);
     forgetRetainedSignInTab(activeInfo.tabId).catch(() => {});
   }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (Number.isInteger(tabId) && changeInfo.url && !isCodexAnalyticsUrl(changeInfo.url)) {
+    adoptedAnalyticsTabIds.add(tabId);
+    forgetRetainedSignInTab(tabId).catch(() => {});
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  adoptedAnalyticsTabIds.delete(tabId);
+  forgetRetainedSignInTab(tabId).catch(() => {});
 });
 
 ensureRefreshAlarm().catch(() => {});
@@ -258,7 +272,8 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       if (temporaryTabWasActivated) {
         await forgetRetainedSignInTab(analyticsTab.id);
       } else {
-        await retainOnlySignInTab(analyticsTab.id);
+        const retainedTabId = await retainOnlySignInTab(analyticsTab.id);
+        keepTemporaryTab = retainedTabId === analyticsTab.id && !temporaryTabWasActivated;
       }
     }
     return { ...result, state: { ...result.state, reason } };
@@ -312,9 +327,21 @@ function getRetainedSignInTab() {
     const retainedTabId = stored[retainedKey];
     if (!Number.isInteger(retainedTabId)) return null;
 
+    if (adoptedAnalyticsTabIds.has(retainedTabId)) {
+      await chrome.storage.local.set({ [retainedKey]: null });
+      return null;
+    }
+
     try {
       const tab = await chrome.tabs.get(retainedTabId);
-      if (tab && isCodexAnalyticsUrl(tab.url)) return tab;
+      if (
+        tab
+        && !tab.active
+        && isCodexAnalyticsUrl(tab.url)
+        && !adoptedAnalyticsTabIds.has(retainedTabId)
+      ) {
+        return tab;
+      }
     } catch {
       // The retained tab was closed by the user.
     }
@@ -326,19 +353,29 @@ function getRetainedSignInTab() {
 function retainOnlySignInTab(tabId) {
   return serializeRetainedSignInTabUpdate(async () => {
     const retainedKey = storageKeys.retainedSignInTab;
+    if (adoptedAnalyticsTabIds.has(tabId)) return null;
+
     const stored = await chrome.storage.local.get([retainedKey]);
     const previousTabId = stored[retainedKey];
     if (Number.isInteger(previousTabId) && previousTabId !== tabId) {
       try {
         const previousTab = await chrome.tabs.get(previousTabId);
-        if (previousTab && !previousTab.active && isCodexAnalyticsUrl(previousTab.url)) {
-          await chrome.tabs.remove(previousTabId);
+        if (
+          previousTab
+          && !previousTab.active
+          && isCodexAnalyticsUrl(previousTab.url)
+          && !adoptedAnalyticsTabIds.has(previousTabId)
+        ) {
+          return previousTabId;
         }
       } catch {
         // The previous retained tab was already closed.
       }
     }
+
+    if (adoptedAnalyticsTabIds.has(tabId)) return null;
     await chrome.storage.local.set({ [retainedKey]: tabId });
+    return tabId;
   });
 }
 
