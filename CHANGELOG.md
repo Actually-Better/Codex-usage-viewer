@@ -4,11 +4,11 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
-- Stop opening Analytics when the popup merely opens; manual refresh now creates a normal inactive temporary Analytics tab, reads it completely, and closes only the tab created by the extension.
+- Stop opening Analytics when the popup merely opens; manual refresh now creates a visible temporary Analytics tab, reads it completely, closes only the tab created by the extension, and restores the previously active tab.
 - Keep an optional **Visit Analytics** button for explicit user navigation without making it a refresh prerequisite.
-- When manual refresh cannot obtain metrics from an existing Analytics page, retry automatically in a newly created temporary inactive page.
-- Give 15-minute refreshes the same real temporary-tab fallback when Analytics is closed, fails, or returns no metrics.
-- Close scheduled sign-in tabs without stealing focus, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
+- When manual refresh cannot obtain metrics from an existing Analytics page, retry automatically in a newly created visible temporary page.
+- Give 15-minute refreshes the same visible temporary-tab fallback when Analytics is closed, fails, or returns no metrics, then return focus to the page the user was viewing; recreate the periodic alarm whenever the background worker starts if it is missing.
+- Close scheduled sign-in tabs and restore the previous focus, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.

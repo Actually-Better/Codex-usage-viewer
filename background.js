@@ -31,6 +31,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+ensureRefreshAlarm().catch(() => {});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
 
@@ -159,9 +161,13 @@ async function refreshOnce(reason) {
 }
 
 async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequested: reason === "popup" }) {
-  const tabs = await chrome.tabs.query({
-    url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
-  });
+  const [tabs, activeTabs] = await Promise.all([
+    chrome.tabs.query({
+      url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
+    }),
+    chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  ]);
+  const previousActiveTab = activeTabs[0] || null;
   let analyticsTab = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
   let temporaryTab = false;
   let keepTemporaryTab = false;
@@ -238,6 +244,9 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   } finally {
     if (temporaryTab && analyticsTab && !keepTemporaryTab) {
       await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+      if (previousActiveTab && previousActiveTab.id !== analyticsTab.id && chrome.tabs.update) {
+        await chrome.tabs.update(previousActiveTab.id, { active: true }).catch(() => {});
+      }
     }
   }
 }
@@ -245,7 +254,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
 async function createTemporaryAnalyticsTab() {
   return chrome.tabs.create({
     url: CODEX_ANALYTICS_URL,
-    active: false
+    active: true
   });
 }
 
@@ -275,7 +284,7 @@ async function markManualSignInRequired(result) {
   const state = {
     ...currentState,
     status: "sign-in-required-manual-refresh",
-    diagnostic: "The scheduled Analytics tab required sign-in and was closed without taking focus."
+    diagnostic: "The scheduled Analytics tab required sign-in, was closed, and focus returned to the previous tab."
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
   return { ...result, state };

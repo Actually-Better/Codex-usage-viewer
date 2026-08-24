@@ -7,13 +7,14 @@ const vm = require("node:vm");
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {} } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1)
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], sendMessage: 0, messages: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
   const listeners = {};
+  let alarmExists = existingAlarm;
   const chrome = {
     runtime: {
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
@@ -21,8 +22,12 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       onMessage: { addListener(listener) { listeners.message = listener; } }
     },
     alarms: {
-      async create() {},
-      async get() { return { name: ChatGPTUsageConfig.refreshAlarmName }; },
+      async create(name, options) {
+        alarmExists = true;
+        calls.alarmCreate += 1;
+        calls.alarmCreateArgs.push({ name, ...options });
+      },
+      async get() { return alarmExists ? { name: ChatGPTUsageConfig.refreshAlarmName } : null; },
       onAlarm: { addListener(listener) { listeners.alarm = listener; } }
     },
     storage: {
@@ -36,7 +41,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       }
     },
     tabs: {
-      async query() { return tabs; },
+      async query(queryInfo = {}) {
+        return queryInfo.active ? tabs.filter((tab) => tab.active) : tabs;
+      },
       async create(args) {
         calls.create += 1;
         calls.createArgs.push(args);
@@ -89,6 +96,19 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   };
 }
 
+test("background worker startup repairs a missing periodic alarm", async () => {
+  const harness = createBackgroundHarness({ existingAlarm: false });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.calls.alarmCreate, 1);
+  assert.deepEqual(harness.calls.alarmCreateArgs, [{
+    name: ChatGPTUsageConfig.refreshAlarmName,
+    delayInMinutes: 1,
+    periodInMinutes: 15
+  }]);
+});
+
 function visibleSnapshot() {
   return {
     status: "ok",
@@ -108,19 +128,23 @@ function visibleSnapshot() {
   };
 }
 
-test("popup refresh creates an inactive temporary Analytics tab and closes it after reading", async () => {
-  const harness = createBackgroundHarness({ snapshot: visibleSnapshot() });
+test("popup refresh visibly opens a temporary Analytics tab and closes it after reading", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
+    snapshot: visibleSnapshot()
+  });
 
   const result = await harness.run("refreshForPopup()");
 
   assert.equal(result.ok, true);
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.create, 1);
-  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.createArgs[0].active, true);
   assert.match(harness.calls.createArgs[0].url, /settings\/analytics/);
   assert.equal(harness.calls.sendMessage, 13);
   assert.equal(harness.calls.remove, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
 });
 
 test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {
@@ -134,9 +158,10 @@ test("periodic refresh creates a real temporary Analytics tab when none is open"
   assert.equal(result.ok, true);
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.create, 1);
-  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.createArgs[0].active, true);
   assert.equal(harness.calls.sendMessage, 13);
   assert.equal(harness.calls.remove, 1);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
 });
 
 test("periodic refresh retries an unusable existing page in a real temporary tab", async () => {
@@ -162,7 +187,7 @@ test("periodic refresh retries an unusable existing page in a real temporary tab
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.sendMessage, 38);
   assert.equal(harness.calls.create, 1);
-  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.createArgs[0].active, true);
   assert.equal(harness.calls.remove, 1);
 });
 
@@ -408,7 +433,7 @@ test("a responsive Analytics page without new metrics is not reported as a failu
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.sendMessage, 50);
   assert.equal(harness.calls.create, 1);
-  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.createArgs[0].active, true);
   assert.equal(harness.calls.remove, 1);
 });
 
@@ -436,7 +461,7 @@ test("manual refresh retries an existing page without metrics in a temporary Ana
   assert.equal(result.state.snapshot.usage.codex5h.value, "5h limit: 60% remaining");
   assert.equal(harness.calls.sendMessage, 38);
   assert.equal(harness.calls.create, 1);
-  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.createArgs[0].active, true);
   assert.equal(harness.calls.remove, 1);
 });
 
