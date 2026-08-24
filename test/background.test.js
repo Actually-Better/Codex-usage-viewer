@@ -257,6 +257,47 @@ test("a popup joining a periodic logged-out refresh keeps the temporary tab for 
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 99, active: true }]);
 });
 
+test("a popup joining during the scheduled sign-in write still keeps the temporary tab", async () => {
+  const harness = createBackgroundHarness({
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-out",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    }
+  });
+  const originalSet = harness.context.chrome.storage.local.set;
+  let releaseManualWrite;
+  let signalManualWrite;
+  const manualWriteStarted = new Promise((resolve) => { signalManualWrite = resolve; });
+  const manualWriteReleased = new Promise((resolve) => { releaseManualWrite = resolve; });
+  harness.context.chrome.storage.local.set = async (values) => {
+    const state = values[ChatGPTUsageConfig.storageKeys.state];
+    if (state && state.status === "sign-in-required-manual-refresh") {
+      signalManualWrite();
+      await manualWriteReleased;
+    }
+    return originalSet(values);
+  };
+
+  const alarmResult = harness.run('refreshOnce("alarm")');
+  await manualWriteStarted;
+  const popupResult = harness.run("refreshForPopup()");
+  releaseManualWrite();
+  const results = await Promise.all([alarmResult, popupResult]);
+
+  assert.equal(results[0].state.status, "sign-in-required");
+  assert.equal(results[1].state.status, "sign-in-required");
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.state].status, "sign-in-required");
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.update, 1);
+  assert.equal(harness.calls.remove, 0);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 99, active: true }]);
+});
+
 test("a non-Analytics page cannot overwrite a valid usage snapshot", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({ initialState: { snapshot: cached } });

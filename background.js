@@ -140,13 +140,19 @@ async function openCodexAnalyticsPage() {
 
 async function refreshOnce(reason) {
   if (!analyticsRefreshPromise) {
-    analyticsRefreshContext = { popupRequested: reason === "popup" };
+    analyticsRefreshContext = {
+      popupRequested: reason === "popup",
+      acceptingPopupJoin: true
+    };
     analyticsRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
       .finally(() => {
         analyticsRefreshPromise = null;
         analyticsRefreshContext = null;
       });
   } else if (reason === "popup" && analyticsRefreshContext) {
+    if (!analyticsRefreshContext.acceptingPopupJoin) {
+      return analyticsRefreshPromise.then(() => refreshOnce("popup"));
+    }
     analyticsRefreshContext.popupRequested = true;
   }
   return analyticsRefreshPromise;
@@ -199,13 +205,15 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       }
     }
 
-    keepTemporaryTab = temporaryTab
-      && result.pageLoginStatus === "logged-out"
-      && refreshContext.popupRequested;
-    if (temporaryTab
-      && result.pageLoginStatus === "logged-out"
-      && !refreshContext.popupRequested) {
+    const temporaryTabRequiresSignIn = temporaryTab && result.pageLoginStatus === "logged-out";
+    const retainedSignInResult = temporaryTabRequiresSignIn ? result : null;
+    if (temporaryTabRequiresSignIn && !refreshContext.popupRequested) {
       result = await markManualSignInRequired(result);
+    }
+    keepTemporaryTab = temporaryTabRequiresSignIn && refreshContext.popupRequested;
+    refreshContext.acceptingPopupJoin = false;
+    if (keepTemporaryTab && result.state.status === "sign-in-required-manual-refresh") {
+      result = await restoreRetainedSignInRequired(retainedSignInResult);
     }
     if (keepTemporaryTab && chrome.tabs.update) {
       await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
@@ -269,6 +277,11 @@ async function markManualSignInRequired(result) {
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
   return { ...result, state };
+}
+
+async function restoreRetainedSignInRequired(result) {
+  await chrome.storage.local.set({ [storageKeys.state]: result.state });
+  return result;
 }
 
 async function markRefreshStarted(reason) {
