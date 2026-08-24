@@ -266,8 +266,8 @@ test("refresh tracks adoption until asynchronous cleanup finishes", async () => 
       retainedReads += 1;
       if (retainedReads === 2 && !activationInjected) {
         activationInjected = true;
-        await harness.setActiveTab(99);
-        await harness.setActiveTab(18);
+        harness.setActiveTab(99);
+        harness.setActiveTab(18);
       }
     }
     return originalGet(keys);
@@ -459,6 +459,41 @@ test("activating a retained sign-in tab transfers ownership between refreshes", 
 
   assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
   assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
+});
+
+test("concurrent release cannot erase a newly retained sign-in tab", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" },
+      { id: 99, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    retainedSignInTabId: 42
+  });
+  const originalGet = harness.context.chrome.storage.local.get;
+  let releaseFirstRead;
+  let signalFirstRead;
+  const firstReadStarted = new Promise((resolve) => { signalFirstRead = resolve; });
+  const firstReadReleased = new Promise((resolve) => { releaseFirstRead = resolve; });
+  let retainedReads = 0;
+  harness.context.chrome.storage.local.get = async (keys) => {
+    const result = await originalGet(keys);
+    if (keys.includes(ChatGPTUsageConfig.storageKeys.retainedSignInTab)) {
+      retainedReads += 1;
+      if (retainedReads === 1) {
+        signalFirstRead();
+        await firstReadReleased;
+      }
+    }
+    return result;
+  };
+
+  const releaseOwnership = harness.run("forgetRetainedSignInTab(42)");
+  await firstReadStarted;
+  const retainReplacement = harness.run("retainOnlySignInTab(99)");
+  releaseFirstRead();
+  await Promise.all([releaseOwnership, retainReplacement]);
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
 });
 
 test("an active retained Analytics tab becomes user-owned and is never removed", async () => {

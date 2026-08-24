@@ -10,6 +10,7 @@ const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
 let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
+let retainedSignInTabUpdate = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureRefreshAlarm();
@@ -298,44 +299,56 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   }
 }
 
-async function getRetainedSignInTab() {
-  const retainedKey = storageKeys.retainedSignInTab;
-  const stored = await chrome.storage.local.get([retainedKey]);
-  const retainedTabId = stored[retainedKey];
-  if (!Number.isInteger(retainedTabId)) return null;
-
-  try {
-    const tab = await chrome.tabs.get(retainedTabId);
-    if (tab && isCodexAnalyticsUrl(tab.url)) return tab;
-  } catch {
-    // The retained tab was closed by the user.
-  }
-  await chrome.storage.local.set({ [retainedKey]: null });
-  return null;
+function serializeRetainedSignInTabUpdate(operation) {
+  const result = retainedSignInTabUpdate.then(operation, operation);
+  retainedSignInTabUpdate = result.catch(() => {});
+  return result;
 }
 
-async function retainOnlySignInTab(tabId) {
-  const retainedKey = storageKeys.retainedSignInTab;
-  const stored = await chrome.storage.local.get([retainedKey]);
-  const previousTabId = stored[retainedKey];
-  if (Number.isInteger(previousTabId) && previousTabId !== tabId) {
+function getRetainedSignInTab() {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.local.get([retainedKey]);
+    const retainedTabId = stored[retainedKey];
+    if (!Number.isInteger(retainedTabId)) return null;
+
     try {
-      const previousTab = await chrome.tabs.get(previousTabId);
-      if (previousTab && !previousTab.active && isCodexAnalyticsUrl(previousTab.url)) {
-        await chrome.tabs.remove(previousTabId);
-      }
+      const tab = await chrome.tabs.get(retainedTabId);
+      if (tab && isCodexAnalyticsUrl(tab.url)) return tab;
     } catch {
-      // The previous retained tab was already closed.
+      // The retained tab was closed by the user.
     }
-  }
-  await chrome.storage.local.set({ [retainedKey]: tabId });
+    await chrome.storage.local.set({ [retainedKey]: null });
+    return null;
+  });
 }
 
-async function forgetRetainedSignInTab(tabId) {
-  const retainedKey = storageKeys.retainedSignInTab;
-  const stored = await chrome.storage.local.get([retainedKey]);
-  if (stored[retainedKey] !== tabId) return;
-  await chrome.storage.local.set({ [retainedKey]: null });
+function retainOnlySignInTab(tabId) {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.local.get([retainedKey]);
+    const previousTabId = stored[retainedKey];
+    if (Number.isInteger(previousTabId) && previousTabId !== tabId) {
+      try {
+        const previousTab = await chrome.tabs.get(previousTabId);
+        if (previousTab && !previousTab.active && isCodexAnalyticsUrl(previousTab.url)) {
+          await chrome.tabs.remove(previousTabId);
+        }
+      } catch {
+        // The previous retained tab was already closed.
+      }
+    }
+    await chrome.storage.local.set({ [retainedKey]: tabId });
+  });
+}
+
+function forgetRetainedSignInTab(tabId) {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.local.get([retainedKey]);
+    if (stored[retainedKey] !== tabId) return;
+    await chrome.storage.local.set({ [retainedKey]: null });
+  });
 }
 
 async function createBackgroundAnalyticsTab() {
