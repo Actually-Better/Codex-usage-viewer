@@ -74,6 +74,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         if (args.active) openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
         const updatedTab = openTabs.find((tab) => tab.id === tabId) || { id: tabId };
         Object.assign(updatedTab, args);
+        if (args.active && listeners.tabActivated) {
+          listeners.tabActivated({ tabId, windowId: updatedTab.windowId });
+        }
         return updatedTab;
       },
       async sendMessage(tabId, message) {
@@ -90,6 +93,12 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       onUpdated: {
         addListener() {},
         removeListener() {}
+      },
+      onActivated: {
+        addListener(listener) { listeners.tabActivated = listener; },
+        removeListener(listener) {
+          if (listeners.tabActivated === listener) delete listeners.tabActivated;
+        }
       }
     }
   };
@@ -116,6 +125,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     },
     setActiveTab(tabId) {
       openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
+      if (listeners.tabActivated) listeners.tabActivated({ tabId });
     },
     setTabUrl(tabId, url) {
       const tab = openTabs.find((candidate) => candidate.id === tabId);
@@ -214,6 +224,28 @@ test("refresh preserves a temporary Analytics tab activated during collection", 
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.remove, 0);
   assert.equal(harness.getOpenTabs().find((tab) => tab.id === 99).active, true);
+});
+
+test("refresh remembers temporary-tab adoption after the user switches away", async () => {
+  let harness;
+  harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 18, url: "https://chatgpt.com/c/next-conversation", active: false, status: "complete" }
+    ],
+    snapshot(callNumber) {
+      if (callNumber === 1) harness.setActiveTab(99);
+      if (callNumber === 2) harness.setActiveTab(18);
+      return visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.getOpenTabs().find((tab) => tab.id === 99).active, false);
+  assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [18]);
 });
 
 test("refresh preserves a temporary tab navigated away during collection", async () => {

@@ -173,23 +173,35 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   let temporaryTab = false;
   let keepTemporaryTab = false;
   let failureStage = analyticsTab ? "read-existing" : "create-temporary";
-
-  if (analyticsTab) {
-    await forgetRetainedSignInTab(analyticsTab.id);
-  }
-  if (!analyticsTab && reason === "popup") {
-    analyticsTab = await getRetainedSignInTab();
-    if (analyticsTab) {
-      temporaryTab = true;
-      failureStage = "read-temporary";
+  let trackedTemporaryTabId = null;
+  let temporaryTabWasActivated = false;
+  const trackTemporaryTabActivation = (activeInfo) => {
+    if (activeInfo && activeInfo.tabId === trackedTemporaryTabId) {
+      temporaryTabWasActivated = true;
     }
+  };
+  if (chrome.tabs.onActivated && chrome.tabs.onActivated.addListener) {
+    chrome.tabs.onActivated.addListener(trackTemporaryTabActivation);
   }
 
-  await markRefreshStarted(reason);
   try {
+    if (analyticsTab) {
+      await forgetRetainedSignInTab(analyticsTab.id);
+    }
+    if (!analyticsTab && reason === "popup") {
+      analyticsTab = await getRetainedSignInTab();
+      if (analyticsTab) {
+        temporaryTab = true;
+        trackedTemporaryTabId = analyticsTab.id;
+        failureStage = "read-temporary";
+      }
+    }
+
+    await markRefreshStarted(reason);
     if (!analyticsTab) {
       analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
     }
 
@@ -202,6 +214,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       failureStage = "create-temporary";
       analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
       result = await readAnalyticsTab(analyticsTab.id);
     }
@@ -215,6 +228,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
         return preserveResponsiveResult(responsiveResult, error, "create");
       }
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
       try {
         result = await readAnalyticsTab(analyticsTab.id);
@@ -254,10 +268,14 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     await chrome.storage.local.set({ [storageKeys.state]: state });
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
+    if (chrome.tabs.onActivated && chrome.tabs.onActivated.removeListener) {
+      chrome.tabs.onActivated.removeListener(trackTemporaryTabActivation);
+    }
     if (temporaryTab && analyticsTab && !keepTemporaryTab) {
       await forgetRetainedSignInTab(analyticsTab.id);
       const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
       const extensionStillOwnsTab = currentTab
+        && !temporaryTabWasActivated
         && !currentTab.active
         && isCodexAnalyticsUrl(currentTab.url);
       if (extensionStillOwnsTab) {
