@@ -270,8 +270,10 @@ async function preserveResponsiveResult(result, fallbackError, failureStage) {
 }
 
 async function markManualSignInRequired(result) {
+  const stored = await chrome.storage.local.get([storageKeys.state]);
+  const currentState = stored[storageKeys.state] || result.state;
   const state = {
-    ...result.state,
+    ...currentState,
     status: "sign-in-required-manual-refresh",
     diagnostic: "The scheduled Analytics tab required sign-in and was closed without taking focus."
   };

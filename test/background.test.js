@@ -211,6 +211,34 @@ test("a periodic logged-out refresh closes its temporary tab without stealing fo
   assert.equal(harness.calls.remove, 1);
 });
 
+test("scheduled sign-in status preserves a newer stored usage snapshot", async () => {
+  const newerSnapshot = visibleSnapshot();
+  const harness = createBackgroundHarness({
+    initialState: {
+      snapshot: newerSnapshot,
+      status: "usage-current",
+      dataCollectedAt: "2026-08-24T10:05:00.000Z",
+      lastRefreshAt: "2026-08-24T10:05:00.000Z"
+    }
+  });
+  harness.context.staleSignInResult = {
+    ok: true,
+    state: {
+      snapshot: { loginStatus: "logged-out", usage: {} },
+      status: "sign-in-required",
+      dataCollectedAt: "2026-08-24T10:00:00.000Z"
+    }
+  };
+
+  const result = await harness.run("markManualSignInRequired(staleSignInResult)");
+
+  assert.equal(result.state.status, "sign-in-required-manual-refresh");
+  assert.deepEqual(result.state.snapshot, newerSnapshot);
+  assert.equal(result.state.dataCollectedAt, "2026-08-24T10:05:00.000Z");
+  assert.equal(result.state.lastRefreshAt, "2026-08-24T10:05:00.000Z");
+  assert.deepEqual(harness.storage[ChatGPTUsageConfig.storageKeys.state], result.state);
+});
+
 test("a periodic logged-out existing page does not create another fallback tab", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
