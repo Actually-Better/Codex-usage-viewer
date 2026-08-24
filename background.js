@@ -10,6 +10,8 @@ const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
 let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
+let retainedSignInTabUpdate = Promise.resolve();
+const adoptedAnalyticsTabIds = new Set();
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureRefreshAlarm();
@@ -29,6 +31,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
     refreshOnce("alarm").catch(() => {});
   }
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (activeInfo && Number.isInteger(activeInfo.tabId)) {
+    adoptedAnalyticsTabIds.add(activeInfo.tabId);
+    forgetRetainedSignInTab(activeInfo.tabId).catch(() => {});
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  adoptedAnalyticsTabIds.delete(tabId);
+  forgetRetainedSignInTab(tabId).catch(() => {});
 });
 
 ensureRefreshAlarm().catch(() => {});
@@ -93,7 +107,7 @@ async function saveSnapshot(snapshot, tab, source) {
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
-  return { ok: true, state: nextState };
+  return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
 
 async function saveContentSnapshot(snapshot, tab) {
@@ -133,7 +147,11 @@ async function openCodexAnalyticsPage() {
   const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
   const existing = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
   if (existing) {
+    await forgetRetainedSignInTab(existing.id);
     await chrome.tabs.update(existing.id, { active: true });
+    if (Number.isInteger(existing.windowId) && chrome.windows && chrome.windows.update) {
+      await chrome.windows.update(existing.windowId, { focused: true });
+    }
     return { ok: true, tabId: existing.id, reused: true };
   }
   const tab = await chrome.tabs.create({ url: CODEX_ANALYTICS_URL, active: true });
@@ -162,19 +180,48 @@ async function refreshOnce(reason) {
 
 async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequested: reason === "popup" }) {
   const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const previousActiveTab = activeTabs[0] || null;
-  let analyticsTab = previousActiveTab && isCodexAnalyticsUrl(previousActiveTab.url)
-    ? previousActiveTab
+  const activeTab = activeTabs[0] || null;
+  let analyticsTab = activeTab && isCodexAnalyticsUrl(activeTab.url)
+    ? activeTab
     : null;
   let temporaryTab = false;
   let keepTemporaryTab = false;
   let failureStage = analyticsTab ? "read-existing" : "create-temporary";
+  let trackedTemporaryTabId = null;
+  let temporaryTabWasActivated = false;
+  const trackTemporaryTabActivation = (activeInfo) => {
+    if (activeInfo && activeInfo.tabId === trackedTemporaryTabId) {
+      temporaryTabWasActivated = true;
+    }
+  };
+  if (chrome.tabs.onActivated && chrome.tabs.onActivated.addListener) {
+    chrome.tabs.onActivated.addListener(trackTemporaryTabActivation);
+  }
 
-  await markRefreshStarted(reason);
   try {
+    if (analyticsTab) {
+      await forgetRetainedSignInTab(analyticsTab.id);
+    }
+    if (!analyticsTab && reason === "popup") {
+      analyticsTab = await getRetainedSignInTab();
+      if (analyticsTab) {
+        temporaryTab = true;
+        trackedTemporaryTabId = analyticsTab.id;
+        failureStage = "read-temporary";
+        if (!isCodexAnalyticsUrl(analyticsTab.url)) {
+          analyticsTab = await chrome.tabs.update(analyticsTab.id, {
+            url: CODEX_ANALYTICS_URL,
+            active: false
+          });
+        }
+      }
+    }
+
+    await markRefreshStarted(reason);
     if (!analyticsTab) {
-      analyticsTab = await createTemporaryAnalyticsTab();
+      analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
     }
 
@@ -185,8 +232,9 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       if (temporaryTab) throw error;
       await markRefreshStarted(`${reason}-temporary-fallback`);
       failureStage = "create-temporary";
-      analyticsTab = await createTemporaryAnalyticsTab();
+      analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
       result = await readAnalyticsTab(analyticsTab.id);
     }
@@ -195,17 +243,22 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       const responsiveResult = result;
       failureStage = "create-temporary";
       try {
-        analyticsTab = await createTemporaryAnalyticsTab();
+        analyticsTab = await createBackgroundAnalyticsTab();
       } catch (error) {
         return preserveResponsiveResult(responsiveResult, error, "create");
       }
       temporaryTab = true;
+      trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
       try {
         result = await readAnalyticsTab(analyticsTab.id);
       } catch (error) {
         return preserveResponsiveResult(responsiveResult, error, "read");
       }
+    }
+
+    if (result.pageLoginStatus === "logged-in") {
+      await removeRetainedSignInTabIfOwned(analyticsTab.id);
     }
 
     const temporaryTabRequiresSignIn = temporaryTab && result.pageLoginStatus === "logged-out";
@@ -218,8 +271,13 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     if (keepTemporaryTab && result.state.status === "sign-in-required-manual-refresh") {
       result = await restoreRetainedSignInRequired(retainedSignInResult);
     }
-    if (keepTemporaryTab && chrome.tabs.update) {
-      await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
+    if (keepTemporaryTab) {
+      if (temporaryTabWasActivated) {
+        await forgetRetainedSignInTab(analyticsTab.id);
+      } else {
+        const retainedTabId = await retainOnlySignInTab(analyticsTab.id);
+        keepTemporaryTab = retainedTabId === analyticsTab.id && !temporaryTabWasActivated;
+      }
     }
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {
@@ -239,28 +297,133 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     await chrome.storage.local.set({ [storageKeys.state]: state });
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
-    if (temporaryTab && analyticsTab && !keepTemporaryTab) {
-      const activeTabsAtCleanup = await chrome.tabs.query({
-        active: true,
-        lastFocusedWindow: true
-      }).catch(() => []);
-      const temporaryTabStillActive = activeTabsAtCleanup.some((tab) => tab.id === analyticsTab.id);
-      await chrome.tabs.remove(analyticsTab.id).catch(() => {});
-      if (temporaryTabStillActive
-        && previousActiveTab
-        && previousActiveTab.id !== analyticsTab.id
-        && chrome.tabs.update) {
-        await chrome.tabs.update(previousActiveTab.id, { active: true }).catch(() => {});
+    try {
+      if (temporaryTab && analyticsTab && !keepTemporaryTab) {
+        await forgetRetainedSignInTab(analyticsTab.id);
+        const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
+        const extensionStillOwnsTab = currentTab
+          && !temporaryTabWasActivated
+          && !currentTab.active;
+        if (extensionStillOwnsTab) {
+          await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+        }
+      }
+    } finally {
+      if (chrome.tabs.onActivated && chrome.tabs.onActivated.removeListener) {
+        chrome.tabs.onActivated.removeListener(trackTemporaryTabActivation);
       }
     }
   }
 }
 
-async function createTemporaryAnalyticsTab() {
-  return chrome.tabs.create({
-    url: CODEX_ANALYTICS_URL,
-    active: true
+function serializeRetainedSignInTabUpdate(operation) {
+  const result = retainedSignInTabUpdate.then(operation, operation);
+  retainedSignInTabUpdate = result.catch(() => {});
+  return result;
+}
+
+function getRetainedSignInTab() {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.session.get([retainedKey]);
+    const retainedTabId = stored[retainedKey];
+    if (!Number.isInteger(retainedTabId)) return null;
+
+    if (adoptedAnalyticsTabIds.has(retainedTabId)) {
+      await chrome.storage.session.set({ [retainedKey]: null });
+      return null;
+    }
+
+    try {
+      const tab = await chrome.tabs.get(retainedTabId);
+      if (
+        tab
+        && !tab.active
+        && !adoptedAnalyticsTabIds.has(retainedTabId)
+      ) {
+        return tab;
+      }
+    } catch {
+      // The retained tab was closed by the user.
+    }
+    await chrome.storage.session.set({ [retainedKey]: null });
+    return null;
   });
+}
+
+function retainOnlySignInTab(tabId) {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    if (adoptedAnalyticsTabIds.has(tabId)) return null;
+
+    const stored = await chrome.storage.session.get([retainedKey]);
+    const previousTabId = stored[retainedKey];
+    if (Number.isInteger(previousTabId) && previousTabId !== tabId) {
+      try {
+        const previousTab = await chrome.tabs.get(previousTabId);
+        if (
+          previousTab
+          && !previousTab.active
+          && !adoptedAnalyticsTabIds.has(previousTabId)
+        ) {
+          return previousTabId;
+        }
+      } catch {
+        // The previous retained tab was already closed.
+      }
+    }
+
+    if (adoptedAnalyticsTabIds.has(tabId)) return null;
+    await chrome.storage.session.set({ [retainedKey]: tabId });
+    return tabId;
+  });
+}
+
+function forgetRetainedSignInTab(tabId) {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.session.get([retainedKey]);
+    if (stored[retainedKey] !== tabId) return;
+    await chrome.storage.session.set({ [retainedKey]: null });
+  });
+}
+
+function removeRetainedSignInTabIfOwned(exceptTabId) {
+  return serializeRetainedSignInTabUpdate(async () => {
+    const retainedKey = storageKeys.retainedSignInTab;
+    const stored = await chrome.storage.session.get([retainedKey]);
+    const retainedTabId = stored[retainedKey];
+    if (!Number.isInteger(retainedTabId) || retainedTabId === exceptTabId) return;
+
+    await chrome.storage.session.set({ [retainedKey]: null });
+    if (adoptedAnalyticsTabIds.has(retainedTabId)) return;
+
+    const retainedTab = await chrome.tabs.get(retainedTabId).catch(() => null);
+    const extensionStillOwnsTab = retainedTab
+      && !retainedTab.active
+      && !adoptedAnalyticsTabIds.has(retainedTabId);
+    if (extensionStillOwnsTab) {
+      await chrome.tabs.remove(retainedTabId).catch(() => {});
+    }
+  });
+}
+
+async function createBackgroundAnalyticsTab() {
+  const activeTabsBeforeCreate = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true
+  }).catch(() => []);
+  const previouslyActiveTab = activeTabsBeforeCreate[0] || null;
+  const createOptions = {
+    url: CODEX_ANALYTICS_URL,
+    active: false
+  };
+  if (previouslyActiveTab && Number.isInteger(previouslyActiveTab.windowId)) {
+    createOptions.windowId = previouslyActiveTab.windowId;
+  }
+
+  const temporaryTab = await chrome.tabs.create(createOptions);
+  return temporaryTab;
 }
 
 async function readAnalyticsTab(tabId) {
@@ -289,7 +452,7 @@ async function markManualSignInRequired(result) {
   const state = {
     ...currentState,
     status: "sign-in-required-manual-refresh",
-    diagnostic: "The scheduled Analytics tab required sign-in, was closed, and focus returned to the previous tab."
+    diagnostic: "The scheduled background Analytics tab required sign-in and was closed."
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
   return { ...result, state };

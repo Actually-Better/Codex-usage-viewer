@@ -4,11 +4,22 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
-- Stop opening Analytics when the popup merely opens; manual refresh now creates a visible temporary Analytics tab, reads it completely, closes only the tab created by the extension, and restores the previous tab only when the user has not switched elsewhere.
-- Keep an optional **Visit Analytics** button for explicit user navigation without making it a refresh prerequisite.
-- Reuse Analytics only when it is already the active page; from every other page, open a new visible temporary page even if Analytics exists in the background.
-- Give 15-minute refreshes the same visible temporary-tab fallback when Analytics is closed, fails, or returns no metrics, then return focus to the page the user was viewing; recreate the periodic alarm whenever the background worker starts if it is missing.
-- Close scheduled sign-in tabs and restore the previous focus, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
+- Stop opening Analytics when the popup merely opens; manual refresh now creates an inactive temporary Analytics tab, reads it completely, and closes only the tab created by the extension without changing focus.
+- Keep an optional **Visit Analytics** button that deliberately opens or focuses Analytics, including its existing browser window, without making it a refresh prerequisite.
+- Reuse Analytics only when it is already the active page; from every other page, open a new inactive temporary page even if Analytics exists in the background.
+- Give 15-minute refreshes the same background-tab fallback when Analytics is closed, fails, or returns no metrics; recreate the periodic alarm whenever the background worker starts if it is missing.
+- Close scheduled sign-in tabs, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
+- Add a persistent **Compact** toggle with paired rows for login/plan, 5-hour/weekly limits, Spark limits, and credits/banked full resets.
+- Replace compact-mode percentage bars with small color-coded circular gauges while preserving horizontal bars in the normal layout.
+- Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.
+- Release retained-tab ownership when the user activates Analytics or opens it through **Visit Analytics**, and replace stale retained tabs when a popup joins an alarm refresh.
+- Recheck a temporary tab immediately before cleanup, preserve it if the user activated it, and keep inactive page-driven redirects under extension ownership.
+- Track temporary-tab activation throughout the full read so a tab remains user-owned even after the user switches away again.
+- Release retained-tab ownership whenever its tab is activated between refreshes, and do not reacquire ownership after activation during a read.
+- Keep activation tracking installed through asynchronous cleanup so last-moment adoption cannot be missed.
+- Serialize retained-tab ownership updates so a stale release cannot erase a concurrently retained replacement.
+- Prefer an existing retained sign-in tab over a newly created duplicate, and preserve it if the user adopts it while its ownership is being checked.
+- Scope retained-tab ownership to the browser session, reuse inactive sign-in redirects without treating them as user adoption, and remove owned sign-in tabs after any refresh confirms authentication.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.
