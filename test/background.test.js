@@ -117,6 +117,10 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     setActiveTab(tabId) {
       openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
     },
+    setTabUrl(tabId, url) {
+      const tab = openTabs.find((candidate) => candidate.id === tabId);
+      if (tab) tab.url = url;
+    },
     run(expression) {
       return vm.runInContext(expression, context);
     }
@@ -193,6 +197,45 @@ test("background refresh does not override a tab selected by the user during col
   assert.equal(result.ok, true);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
   assert.equal(harness.calls.update, 0);
+});
+
+test("refresh preserves a temporary Analytics tab activated during collection", async () => {
+  let harness;
+  harness = createBackgroundHarness({
+    tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
+    snapshot(callNumber) {
+      if (callNumber === 1) harness.setActiveTab(99);
+      return visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.getOpenTabs().find((tab) => tab.id === 99).active, true);
+});
+
+test("refresh preserves a temporary tab navigated away during collection", async () => {
+  let harness;
+  harness = createBackgroundHarness({
+    tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
+    snapshot(callNumber) {
+      if (callNumber === 1) {
+        harness.setTabUrl(99, "https://chatgpt.com/c/user-owned-conversation");
+      }
+      return visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(
+    harness.getOpenTabs().find((tab) => tab.id === 99).url,
+    "https://chatgpt.com/c/user-owned-conversation"
+  );
 });
 
 test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {

@@ -256,7 +256,13 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   } finally {
     if (temporaryTab && analyticsTab && !keepTemporaryTab) {
       await forgetRetainedSignInTab(analyticsTab.id);
-      await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+      const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
+      const extensionStillOwnsTab = currentTab
+        && !currentTab.active
+        && isCodexAnalyticsUrl(currentTab.url);
+      if (extensionStillOwnsTab) {
+        await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+      }
     }
   }
 }

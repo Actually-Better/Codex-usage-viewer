@@ -13,6 +13,7 @@ All notable user-facing changes are documented here.
 - Replace compact-mode percentage bars with small color-coded circular gauges while preserving horizontal bars in the normal layout.
 - Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.
 - Release retained-tab ownership when the user activates Analytics or opens it through **Visit Analytics**, and replace stale retained tabs when a popup joins an alarm refresh.
+- Recheck a temporary tab immediately before cleanup and preserve it if the user activated or navigated it during collection.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.
