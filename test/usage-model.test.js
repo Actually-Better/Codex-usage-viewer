@@ -10,6 +10,10 @@ test("configuration provides a persistent compact-mode preference key", () => {
     ChatGPTUsageConfig.storageKeys.compactMode,
     "chatgptUsageMonitor.compactMode"
   );
+  assert.equal(
+    ChatGPTUsageConfig.storageKeys.retainedSignInTab,
+    "chatgptUsageMonitor.retainedSignInTab"
+  );
 });
 
 test("formatRelativeTime presents friendly refresh ages", () => {

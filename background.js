@@ -173,6 +173,14 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   let keepTemporaryTab = false;
   let failureStage = analyticsTab ? "read-existing" : "create-temporary";
 
+  if (!analyticsTab && reason === "popup") {
+    analyticsTab = await getRetainedSignInTab();
+    if (analyticsTab) {
+      temporaryTab = true;
+      failureStage = "read-temporary";
+    }
+  }
+
   await markRefreshStarted(reason);
   try {
     if (!analyticsTab) {
@@ -221,6 +229,9 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     if (keepTemporaryTab && result.state.status === "sign-in-required-manual-refresh") {
       result = await restoreRetainedSignInRequired(retainedSignInResult);
     }
+    if (keepTemporaryTab) {
+      await rememberRetainedSignInTab(analyticsTab.id);
+    }
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
@@ -240,9 +251,39 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
     if (temporaryTab && analyticsTab && !keepTemporaryTab) {
+      await forgetRetainedSignInTab(analyticsTab.id);
       await chrome.tabs.remove(analyticsTab.id).catch(() => {});
     }
   }
+}
+
+async function getRetainedSignInTab() {
+  const retainedKey = storageKeys.retainedSignInTab;
+  const stored = await chrome.storage.local.get([retainedKey]);
+  const retainedTabId = stored[retainedKey];
+  if (!Number.isInteger(retainedTabId)) return null;
+
+  try {
+    const tab = await chrome.tabs.get(retainedTabId);
+    if (tab && isCodexAnalyticsUrl(tab.url)) return tab;
+  } catch {
+    // The retained tab was closed by the user.
+  }
+  await chrome.storage.local.set({ [retainedKey]: null });
+  return null;
+}
+
+async function rememberRetainedSignInTab(tabId) {
+  await chrome.storage.local.set({
+    [storageKeys.retainedSignInTab]: tabId
+  });
+}
+
+async function forgetRetainedSignInTab(tabId) {
+  const retainedKey = storageKeys.retainedSignInTab;
+  const stored = await chrome.storage.local.get([retainedKey]);
+  if (stored[retainedKey] !== tabId) return;
+  await chrome.storage.local.set({ [retainedKey]: null });
 }
 
 async function createBackgroundAnalyticsTab() {
