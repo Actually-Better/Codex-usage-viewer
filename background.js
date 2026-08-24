@@ -31,6 +31,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (activeInfo && Number.isInteger(activeInfo.tabId)) {
+    forgetRetainedSignInTab(activeInfo.tabId).catch(() => {});
+  }
+});
+
 ensureRefreshAlarm().catch(() => {});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -248,7 +254,11 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       result = await restoreRetainedSignInRequired(retainedSignInResult);
     }
     if (keepTemporaryTab) {
-      await retainOnlySignInTab(analyticsTab.id);
+      if (temporaryTabWasActivated) {
+        await forgetRetainedSignInTab(analyticsTab.id);
+      } else {
+        await retainOnlySignInTab(analyticsTab.id);
+      }
     }
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {

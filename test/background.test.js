@@ -15,6 +15,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   };
   const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
   const listeners = {};
+  const tabActivatedListeners = new Set();
   let alarmExists = existingAlarm;
   let openTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
@@ -74,8 +75,10 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         if (args.active) openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
         const updatedTab = openTabs.find((tab) => tab.id === tabId) || { id: tabId };
         Object.assign(updatedTab, args);
-        if (args.active && listeners.tabActivated) {
-          listeners.tabActivated({ tabId, windowId: updatedTab.windowId });
+        if (args.active) {
+          await Promise.all([...tabActivatedListeners].map((listener) => (
+            listener({ tabId, windowId: updatedTab.windowId })
+          )));
         }
         return updatedTab;
       },
@@ -95,10 +98,8 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         removeListener() {}
       },
       onActivated: {
-        addListener(listener) { listeners.tabActivated = listener; },
-        removeListener(listener) {
-          if (listeners.tabActivated === listener) delete listeners.tabActivated;
-        }
+        addListener(listener) { tabActivatedListeners.add(listener); },
+        removeListener(listener) { tabActivatedListeners.delete(listener); }
       }
     }
   };
@@ -123,9 +124,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     getOpenTabs() {
       return openTabs.map((tab) => ({ ...tab }));
     },
-    setActiveTab(tabId) {
+    async setActiveTab(tabId) {
       openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
-      if (listeners.tabActivated) listeners.tabActivated({ tabId });
+      await Promise.all([...tabActivatedListeners].map((listener) => listener({ tabId })));
     },
     setTabUrl(tabId, url) {
       const tab = openTabs.find((candidate) => candidate.id === tabId);
@@ -410,6 +411,22 @@ test("a retained sign-in tab is removed after authentication succeeds", async ()
   assert.equal(harness.calls.create, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
   assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+});
+
+test("activating a retained sign-in tab transfers ownership between refreshes", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    retainedSignInTabId: 42
+  });
+
+  await harness.setActiveTab(42);
+  await harness.setActiveTab(17);
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
 });
 
 test("an active retained Analytics tab becomes user-owned and is never removed", async () => {
