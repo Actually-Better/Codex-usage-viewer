@@ -34,7 +34,7 @@
     try {
       const response = await withTimeout(
         chrome.runtime.sendMessage({ type: "usage:refresh" }),
-        27000,
+        47000,
         "Refresh timed out. Reload any open ChatGPT page and try again."
       );
       renderState(response && response.state);
@@ -96,7 +96,7 @@
       statusTitle.textContent = "Refreshing usage";
       statusDetail.textContent = hasVisibleUsage
         ? "Checking for newer values; the last collected usage remains visible."
-        : "Opening a temporary background Analytics tab and waiting for all usage cards.";
+        : "Reading Analytics and opening a temporary fallback page if needed.";
     } else if (state && state.status === "analytics-no-new-data") {
       statusTitle.textContent = hasVisibleUsage ? "Showing cached usage" : "Analytics loaded";
       statusDetail.textContent = hasVisibleUsage
@@ -383,7 +383,7 @@
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");
     }
-    warnings.push("Usage is read from the rendered Codex Analytics UI in a temporary inactive tab.");
+    warnings.push("Usage is read from the rendered Codex Analytics UI, with a temporary inactive tab as fallback.");
     return warnings;
   }
 

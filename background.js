@@ -7,7 +7,7 @@ const ANALYTICS_READ_ATTEMPTS = 25;
 const ANALYTICS_READ_INTERVAL_MS = 400;
 const ANALYTICS_STABLE_READS_REQUIRED = 5;
 const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
-const REFRESH_TIMEOUT_MS = 25000;
+const REFRESH_TIMEOUT_MS = 45000;
 let analyticsRefreshPromise = null;
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -155,23 +155,31 @@ async function refreshFromAnalyticsPage(reason) {
   let temporaryTab = false;
   let keepTemporaryTab = false;
 
-  if (!analyticsTab && reason === "alarm") {
-    const data = await chrome.storage.local.get([storageKeys.state]);
-    return { ok: false, state: data[storageKeys.state] || {}, skipped: true };
-  }
-
   await markRefreshStarted(reason);
   try {
     if (!analyticsTab) {
-      analyticsTab = await chrome.tabs.create({
-        url: CODEX_ANALYTICS_URL,
-        active: false
-      });
+      analyticsTab = await createTemporaryAnalyticsTab();
       temporaryTab = true;
     }
 
-    await waitForTabReadyOrDelay(analyticsTab.id);
-    const result = await requestSnapshotWithRetry(analyticsTab.id);
+    let result;
+    try {
+      result = await readAnalyticsTab(analyticsTab.id);
+    } catch (error) {
+      if (temporaryTab) throw error;
+      await markRefreshStarted(`${reason}-temporary-fallback`);
+      analyticsTab = await createTemporaryAnalyticsTab();
+      temporaryTab = true;
+      result = await readAnalyticsTab(analyticsTab.id);
+    }
+
+    if (!temporaryTab && result.fresh === false) {
+      await markRefreshStarted(`${reason}-temporary-fallback`);
+      analyticsTab = await createTemporaryAnalyticsTab();
+      temporaryTab = true;
+      result = await readAnalyticsTab(analyticsTab.id);
+    }
+
     keepTemporaryTab = temporaryTab && result.pageLoginStatus === "logged-out";
     if (keepTemporaryTab && chrome.tabs.update) {
       await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
@@ -195,6 +203,18 @@ async function refreshFromAnalyticsPage(reason) {
       await chrome.tabs.remove(analyticsTab.id).catch(() => {});
     }
   }
+}
+
+async function createTemporaryAnalyticsTab() {
+  return chrome.tabs.create({
+    url: CODEX_ANALYTICS_URL,
+    active: false
+  });
+}
+
+async function readAnalyticsTab(tabId) {
+  await waitForTabReadyOrDelay(tabId);
+  return requestSnapshotWithRetry(tabId);
 }
 
 async function markRefreshStarted(reason) {

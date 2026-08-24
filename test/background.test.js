@@ -51,11 +51,11 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         calls.updateArgs.push({ tabId, ...args });
         return { id: tabId, ...args };
       },
-      async sendMessage(_tabId, message) {
+      async sendMessage(tabId, message) {
         calls.sendMessage += 1;
         calls.messages.push(message);
         if (sendError) throw sendError;
-        return typeof snapshot === "function" ? snapshot(calls.sendMessage) : snapshot;
+        return typeof snapshot === "function" ? snapshot(calls.sendMessage, tabId, message) : snapshot;
       },
       async get(tabId) { return { id: tabId, status: "complete" }; },
       onUpdated: {
@@ -122,21 +122,47 @@ test("popup refresh creates an inactive temporary Analytics tab and closes it af
   assert.deepEqual(harness.calls.removedTabIds, [99]);
 });
 
-test("periodic refresh does not create Analytics when it is not already open", async () => {
-  const cached = visibleSnapshot();
+test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
-    snapshot: visibleSnapshot(),
-    initialState: { snapshot: cached, dataCollectedAt: cached.collectedAt }
+    snapshot: visibleSnapshot()
   });
 
   const result = await harness.run('refreshOnce("alarm")');
 
-  assert.equal(result.ok, false);
-  assert.equal(result.skipped, true);
-  assert.deepEqual(result.state.snapshot, cached);
-  assert.equal(harness.calls.create, 0);
-  assert.equal(harness.calls.sendMessage, 0);
+  assert.equal(result.ok, true);
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.sendMessage, 13);
+  assert.equal(harness.calls.remove, 1);
+});
+
+test("periodic refresh retries an unusable existing page in a real temporary tab", async () => {
+  const emptySnapshot = {
+    status: "ok",
+    hostname: "chatgpt.com",
+    pathCategory: "codex",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  };
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot(_callNumber, tabId) {
+      return tabId === 42 ? emptySnapshot : visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run('refreshOnce("alarm")');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.sendMessage, 38);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.remove, 1);
 });
 
 test("a temporary Analytics tab remains open only when ChatGPT requires sign-in", async () => {
@@ -229,10 +255,41 @@ test("a responsive Analytics page without new metrics is not reported as a failu
   assert.equal(result.fresh, false);
   assert.equal(result.state.status, "analytics-no-new-data");
   assert.deepEqual(result.state.snapshot, cached);
-  assert.equal(harness.calls.sendMessage, 25);
+  assert.equal(harness.calls.sendMessage, 50);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.remove, 1);
 });
 
-test("refresh failure requires the Analytics content script to be unreachable", async () => {
+test("manual refresh retries an existing page without metrics in a temporary Analytics tab", async () => {
+  const emptySnapshot = {
+    status: "ok",
+    hostname: "chatgpt.com",
+    pathCategory: "codex",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  };
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot(_callNumber, tabId) {
+      return tabId === 42 ? emptySnapshot : visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(result.state.snapshot.usage.codex5h.value, "5h limit: 60% remaining");
+  assert.equal(harness.calls.sendMessage, 38);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.createArgs[0].active, false);
+  assert.equal(harness.calls.remove, 1);
+});
+
+test("refresh failure requires both the existing and temporary Analytics readers to be unreachable", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
     sendError: new Error("Receiving end does not exist")
@@ -243,7 +300,9 @@ test("refresh failure requires the Analytics content script to be unreachable", 
   assert.equal(result.ok, false);
   assert.equal(result.state.status, "content-script-unavailable");
   assert.match(result.error, /Receiving end does not exist/);
-  assert.equal(harness.calls.sendMessage, 25);
+  assert.equal(harness.calls.sendMessage, 50);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.remove, 1);
 });
 
 test("refresh waits for late usage cards before saving the page snapshot", async () => {

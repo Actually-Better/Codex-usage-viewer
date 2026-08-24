@@ -71,7 +71,7 @@ The extension may need parser updates when ChatGPT changes page structure, wordi
 
 The extension reads rendered UI text and accessibility attributes only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
 
-For a manual refresh, the extension creates a normal but inactive Codex Analytics tab, waits for its UI to render completely, reads it with the same content extractor used on an already-open Analytics page, and closes only the tab it created. This is more reliable than embedding Analytics in a hidden frame and does not require the user to open or keep Analytics visible.
+For a manual refresh, the extension first reuses an already-open Codex Analytics page when available. If that page fails or returns no metrics, it creates a normal but inactive temporary Analytics tab, waits for its UI to render completely, retries the same extractor there, and closes only the tab it created. This is more reliable than embedding Analytics in a hidden frame and does not require the user to open or keep Analytics visible.
 
 Codex usage extraction is centralized in `usage-model.js`. The parser normalizes visible text, matches language-aware usage concepts, and returns structured metrics for 5-hour limits, weekly limits, credits, banked full resets, expiration, and reset text when those values are visible.
 
@@ -103,9 +103,9 @@ When a value cannot be found from visible text, the extension leaves that metric
 
 - Click **Refresh** from any page. You do not need to open Analytics first.
 - Click **Visit Analytics** only when you want to inspect the source page yourself; it is optional for refresh.
-- A manual refresh creates a temporary inactive Analytics tab, reads it, and closes it automatically. If sign-in is required, the tab remains open and is activated so you can sign in through ChatGPT.
-- The 15-minute periodic check is opportunistic: it refreshes only when Analytics is already open and never creates a periodic tab.
-- A refresh samples Analytics every 400 ms for up to 10 seconds. It observes at least 13 reads after the first metric and requires five stable merged reads before accepting the snapshot. Metrics found in different reads are accumulated instead of replacing one another.
+- A manual refresh reuses a working Analytics page or automatically falls back to a temporary inactive tab when data cannot be obtained. The temporary tab is closed after reading; if sign-in is required, it remains open and is activated so you can sign in through ChatGPT.
+- The 15-minute periodic check uses the same recovery path: it reuses a working Analytics page or creates a real temporary inactive tab when Analytics is closed, fails, or returns no metrics.
+- Each page attempt samples Analytics every 400 ms for up to 10 seconds. A fallback can therefore extend the full refresh, whose timeout is 45 seconds. The reader observes at least 13 reads after the first metric and requires five stable merged reads before accepting the snapshot. Metrics found in different reads are accumulated instead of replacing one another.
 - The main status shows a friendly age such as **Last refresh: 5 min ago**. Diagnostics retain the exact collection and attempt timestamps.
 - Open **Diagnostics** only when troubleshooting. It shows extractor version, page detection, visible fields, and local refresh timing.
 - Use **Copy diagnostics** when opening an issue. The copied payload is redacted and omits raw page text, full URLs, conversation content, and account identifiers.

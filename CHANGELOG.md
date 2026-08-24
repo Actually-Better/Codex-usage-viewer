@@ -6,7 +6,8 @@ All notable user-facing changes are documented here.
 
 - Stop opening Analytics when the popup merely opens; manual refresh now creates a normal inactive temporary Analytics tab, reads it completely, and closes only the tab created by the extension.
 - Keep an optional **Visit Analytics** button for explicit user navigation without making it a refresh prerequisite.
-- Keep 15-minute refreshes opportunistic so they never create periodic tabs when Analytics is closed.
+- When manual refresh cannot obtain metrics from an existing Analytics page, retry automatically in a newly created temporary inactive page.
+- Give 15-minute refreshes the same real temporary-tab fallback when Analytics is closed, fails, or returns no metrics.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.
