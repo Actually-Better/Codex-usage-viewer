@@ -13,7 +13,7 @@ All notable user-facing changes are documented here.
 - Replace compact-mode percentage bars with small color-coded circular gauges while preserving horizontal bars in the normal layout.
 - Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.
 - Release retained-tab ownership when the user activates Analytics or opens it through **Visit Analytics**, and replace stale retained tabs when a popup joins an alarm refresh.
-- Recheck a temporary tab immediately before cleanup and preserve it if the user activated or navigated it during collection.
+- Recheck a temporary tab immediately before cleanup, preserve it if the user activated it, and keep inactive page-driven redirects under extension ownership.
 - Track temporary-tab activation throughout the full read so a tab remains user-owned even after the user switches away again.
 - Release retained-tab ownership whenever its tab is activated between refreshes, and do not reacquire ownership after activation during a read.
 - Keep activation tracking installed through asynchronous cleanup so last-moment adoption cannot be missed.

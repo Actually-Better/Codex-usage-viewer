@@ -303,8 +303,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
         const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
         const extensionStillOwnsTab = currentTab
           && !temporaryTabWasActivated
-          && !currentTab.active
-          && isCodexAnalyticsUrl(currentTab.url);
+          && !currentTab.active;
         if (extensionStillOwnsTab) {
           await chrome.tabs.remove(analyticsTab.id).catch(() => {});
         }

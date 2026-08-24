@@ -308,7 +308,7 @@ test("refresh tracks adoption until asynchronous cleanup finishes", async () => 
   assert.equal(harness.getOpenTabs().some((tab) => tab.id === 99), true);
 });
 
-test("refresh preserves a temporary tab navigated away during collection", async () => {
+test("an inactive automatic redirect remains extension-owned during cleanup", async () => {
   let harness;
   harness = createBackgroundHarness({
     tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
@@ -323,11 +323,8 @@ test("refresh preserves a temporary tab navigated away during collection", async
   const result = await harness.run("refreshForPopup()");
 
   assert.equal(result.state.status, "usage-current");
-  assert.equal(harness.calls.remove, 0);
-  assert.equal(
-    harness.getOpenTabs().find((tab) => tab.id === 99).url,
-    "https://chatgpt.com/c/user-owned-conversation"
-  );
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 99), false);
 });
 
 test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {
