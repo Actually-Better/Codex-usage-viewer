@@ -164,6 +164,24 @@ test("periodic refresh creates a real temporary Analytics tab when none is open"
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
 });
 
+test("refresh opens a visible temporary tab when Analytics exists only in the background", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    snapshot: visibleSnapshot()
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.createArgs[0].active, true);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
+});
+
 test("periodic refresh retries an unusable existing page in a real temporary tab", async () => {
   const emptySnapshot = {
     status: "ok",
@@ -175,7 +193,7 @@ test("periodic refresh retries an unusable existing page in a real temporary tab
     usage: {}
   };
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot(_callNumber, tabId) {
       return tabId === 42 ? emptySnapshot : visibleSnapshot();
     }
@@ -266,7 +284,7 @@ test("scheduled sign-in status preserves a newer stored usage snapshot", async (
 
 test("a periodic logged-out existing page does not create another fallback tab", async () => {
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot: {
       status: "ok",
       hostname: "chatgpt.com",
@@ -383,7 +401,7 @@ test("a non-Analytics page cannot overwrite a valid usage snapshot", async () =>
 
 test("Visit Analytics focuses an existing page instead of duplicating it", async () => {
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }]
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }]
   });
 
   const result = await harness.run("openCodexAnalyticsPage()");
@@ -397,7 +415,7 @@ test("Visit Analytics focuses an existing page instead of duplicating it", async
 test("concurrent popup refreshes share one Analytics collection", async () => {
   const snapshot = visibleSnapshot();
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot
   });
 
@@ -412,7 +430,7 @@ test("concurrent popup refreshes share one Analytics collection", async () => {
 test("a responsive Analytics page without new metrics is not reported as a failure", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot: {
       status: "ok",
       hostname: "chatgpt.com",
@@ -448,7 +466,7 @@ test("manual refresh retries an existing page without metrics in a temporary Ana
     usage: {}
   };
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot(_callNumber, tabId) {
       return tabId === 42 ? emptySnapshot : visibleSnapshot();
     }
@@ -467,7 +485,7 @@ test("manual refresh retries an existing page without metrics in a temporary Ana
 
 test("refresh failure requires both the existing and temporary Analytics readers to be unreachable", async () => {
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     sendError: new Error("Receiving end does not exist")
   });
 
@@ -484,7 +502,7 @@ test("refresh failure requires both the existing and temporary Analytics readers
 test("failure to create an optional fallback preserves the responsive incomplete result", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot: {
       status: "ok",
       hostname: "chatgpt.com",
@@ -523,7 +541,7 @@ test("failure to read an optional fallback preserves the responsive incomplete r
     usage: {}
   };
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot(_callNumber, tabId) {
       if (tabId === 42) return emptySnapshot;
       throw new Error("Temporary reader unavailable");
@@ -565,7 +583,7 @@ test("fallback preservation keeps a newer content snapshot stored during the ret
   let harness;
   let newerSnapshotStored = false;
   harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot(_callNumber, tabId) {
       if (tabId === 42) return emptySnapshot;
       if (!newerSnapshotStored) {
@@ -624,7 +642,7 @@ test("refresh waits for late usage cards before saving the page snapshot", async
     }
   };
   const harness = createBackgroundHarness({
-    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot(callNumber) {
       return callNumber <= 5 ? partialSnapshot : lateSnapshot;
     }

@@ -161,14 +161,11 @@ async function refreshOnce(reason) {
 }
 
 async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequested: reason === "popup" }) {
-  const [tabs, activeTabs] = await Promise.all([
-    chrome.tabs.query({
-      url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
-    }),
-    chrome.tabs.query({ active: true, lastFocusedWindow: true })
-  ]);
+  const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const previousActiveTab = activeTabs[0] || null;
-  let analyticsTab = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
+  let analyticsTab = previousActiveTab && isCodexAnalyticsUrl(previousActiveTab.url)
+    ? previousActiveTab
+    : null;
   let temporaryTab = false;
   let keepTemporaryTab = false;
   let failureStage = analyticsTab ? "read-existing" : "create-temporary";
