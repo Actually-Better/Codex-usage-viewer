@@ -133,6 +133,7 @@ async function openCodexAnalyticsPage() {
   const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
   const existing = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
   if (existing) {
+    await forgetRetainedSignInTab(existing.id);
     await chrome.tabs.update(existing.id, { active: true });
     if (Number.isInteger(existing.windowId) && chrome.windows && chrome.windows.update) {
       await chrome.windows.update(existing.windowId, { focused: true });
@@ -173,6 +174,9 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
   let keepTemporaryTab = false;
   let failureStage = analyticsTab ? "read-existing" : "create-temporary";
 
+  if (analyticsTab) {
+    await forgetRetainedSignInTab(analyticsTab.id);
+  }
   if (!analyticsTab && reason === "popup") {
     analyticsTab = await getRetainedSignInTab();
     if (analyticsTab) {
@@ -230,7 +234,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       result = await restoreRetainedSignInRequired(retainedSignInResult);
     }
     if (keepTemporaryTab) {
-      await rememberRetainedSignInTab(analyticsTab.id);
+      await retainOnlySignInTab(analyticsTab.id);
     }
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {
@@ -273,10 +277,21 @@ async function getRetainedSignInTab() {
   return null;
 }
 
-async function rememberRetainedSignInTab(tabId) {
-  await chrome.storage.local.set({
-    [storageKeys.retainedSignInTab]: tabId
-  });
+async function retainOnlySignInTab(tabId) {
+  const retainedKey = storageKeys.retainedSignInTab;
+  const stored = await chrome.storage.local.get([retainedKey]);
+  const previousTabId = stored[retainedKey];
+  if (Number.isInteger(previousTabId) && previousTabId !== tabId) {
+    try {
+      const previousTab = await chrome.tabs.get(previousTabId);
+      if (previousTab && !previousTab.active && isCodexAnalyticsUrl(previousTab.url)) {
+        await chrome.tabs.remove(previousTabId);
+      }
+    } catch {
+      // The previous retained tab was already closed.
+    }
+  }
+  await chrome.storage.local.set({ [retainedKey]: tabId });
 }
 
 async function forgetRetainedSignInTab(tabId) {
@@ -301,18 +316,6 @@ async function createBackgroundAnalyticsTab() {
   }
 
   const temporaryTab = await chrome.tabs.create(createOptions);
-  if (!previouslyActiveTab || !chrome.tabs.update) return temporaryTab;
-
-  const activeTabsAfterCreate = await chrome.tabs.query({
-    active: true,
-    lastFocusedWindow: true
-  }).catch(() => []);
-  const edgeActivatedTemporaryTab = activeTabsAfterCreate.some(
-    (tab) => tab.id === temporaryTab.id
-  );
-  if (edgeActivatedTemporaryTab) {
-    await chrome.tabs.update(previouslyActiveTab.id, { active: true }).catch(() => {});
-  }
   return temporaryTab;
 }
 

@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, forceCreatedTabActive = false, initialState = {}, existingAlarm = true, retainedSignInTabId = null } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
@@ -57,7 +57,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         calls.create += 1;
         calls.createArgs.push(args);
         if (createError) throw createError;
-        const createdTabIsActive = Boolean(args.active || forceCreatedTabActive);
+        const createdTabIsActive = Boolean(args.active);
         if (createdTabIsActive) openTabs = openTabs.map((tab) => ({ ...tab, active: false }));
         const createdTab = { id: 99, url: args.url, active: createdTabIsActive, status: "complete" };
         openTabs.push(createdTab);
@@ -193,21 +193,6 @@ test("background refresh does not override a tab selected by the user during col
   assert.equal(result.ok, true);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
   assert.equal(harness.calls.update, 0);
-});
-
-test("refresh restores the prior tab if Edge activates an inactive temporary tab", async () => {
-  const harness = createBackgroundHarness({
-    tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
-    snapshot: visibleSnapshot(),
-    forceCreatedTabActive: true
-  });
-
-  const result = await harness.run("refreshForPopup()");
-
-  assert.equal(result.ok, true);
-  assert.equal(harness.calls.createArgs[0].active, false);
-  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
-  assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [17]);
 });
 
 test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {
@@ -352,6 +337,21 @@ test("a retained sign-in tab is removed after authentication succeeds", async ()
   assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
+test("an active retained Analytics tab becomes user-owned and is never removed", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
+    snapshot: visibleSnapshot(),
+    retainedSignInTabId: 42
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.create, 0);
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+});
+
 test("a periodic logged-out refresh closes its temporary tab without stealing focus", async () => {
   const harness = createBackgroundHarness({
     snapshot: {
@@ -447,6 +447,36 @@ test("a popup joining a periodic logged-out refresh keeps the temporary tab for 
   assert.equal(harness.calls.remove, 0);
 });
 
+test("a popup joining an alarm replaces an older retained sign-in tab", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-out",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    },
+    retainedSignInTabId: 42
+  });
+
+  const results = await harness.run('Promise.all([refreshOnce("alarm"), refreshForPopup()])');
+
+  assert.equal(results[1].state.status, "sign-in-required");
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [42]);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.equal(
+    harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
+    1
+  );
+});
+
 test("a popup joining during the scheduled sign-in write still keeps the temporary tab", async () => {
   const harness = createBackgroundHarness({
     snapshot: {
@@ -522,7 +552,8 @@ test("Visit Analytics focuses an existing page instead of duplicating it", async
     tabs: [
       { id: 17, windowId: 5, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
       { id: 42, windowId: 5, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
-    ]
+    ],
+    retainedSignInTabId: 42
   });
 
   const result = await harness.run("openCodexAnalyticsPage()");
@@ -533,6 +564,7 @@ test("Visit Analytics focuses an existing page instead of duplicating it", async
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 42, active: true }]);
   assert.deepEqual(harness.calls.windowUpdateArgs, [{ windowId: 5, focused: true }]);
   assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [42]);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("Visit Analytics creates a focused active page when none exists", async () => {

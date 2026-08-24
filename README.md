@@ -72,7 +72,7 @@ The extension may need parser updates when ChatGPT changes page structure, wordi
 
 The extension reads rendered UI text and accessibility attributes only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
 
-For a manual refresh, the extension reuses Codex Analytics only when it is the currently active page. From every other page it creates an inactive temporary Analytics tab—even if another Analytics tab exists in the background—waits for its UI to render completely, and closes only the tab it created. The page you are using keeps focus throughout collection; as an Edge safeguard, the extension immediately restores it if the browser activates a tab requested as inactive. This is more reliable than embedding Analytics in a hidden frame and does not require the user to open or keep Analytics visible.
+For a manual refresh, the extension reuses Codex Analytics only when it is the currently active page. From every other page it creates an inactive temporary Analytics tab—even if another Analytics tab exists in the background—waits for its UI to render completely, and closes only the tab it created. The page you are using keeps focus throughout collection because Refresh requests an inactive tab; **Visit Analytics** is the separate action that deliberately activates Analytics. This is more reliable than embedding Analytics in a hidden frame and does not require the user to open or keep Analytics visible.
 
 Codex usage extraction is centralized in `usage-model.js`. The parser normalizes visible text, matches language-aware usage concepts, and returns structured metrics for 5-hour limits, weekly limits, credits, banked full resets, expiration, and reset text when those values are visible.
 

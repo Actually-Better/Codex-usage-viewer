@@ -11,8 +11,8 @@ All notable user-facing changes are documented here.
 - Close scheduled sign-in tabs, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
 - Add a persistent **Compact** toggle with paired rows for login/plan, 5-hour/weekly limits, Spark limits, and credits/banked full resets.
 - Replace compact-mode percentage bars with small color-coded circular gauges while preserving horizontal bars in the normal layout.
-- Defensively restore the previous tab if Edge activates an Analytics tab created with `active: false`.
 - Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.
+- Release retained-tab ownership when the user activates Analytics or opens it through **Visit Analytics**, and replace stale retained tabs when a popup joins an alarm refresh.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.
