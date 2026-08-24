@@ -16,6 +16,7 @@ All notable user-facing changes are documented here.
 - Recheck a temporary tab immediately before cleanup and preserve it if the user activated or navigated it during collection.
 - Track temporary-tab activation throughout the full read so a tab remains user-owned even after the user switches away again.
 - Release retained-tab ownership whenever its tab is activated between refreshes, and do not reacquire ownership after activation during a read.
+- Keep activation tracking installed through asynchronous cleanup so last-moment adoption cannot be missed.
 - Keep the popup dimensions and cached metrics stable while refreshing in Microsoft Edge.
 - Prevent concurrent refreshes and preserve valid Analytics usage when ordinary ChatGPT pages load.
 - Distinguish the latest data collection time from the latest refresh attempt.

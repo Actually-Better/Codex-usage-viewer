@@ -249,6 +249,38 @@ test("refresh remembers temporary-tab adoption after the user switches away", as
   assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [18]);
 });
 
+test("refresh tracks adoption until asynchronous cleanup finishes", async () => {
+  let harness;
+  harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 18, url: "https://chatgpt.com/c/next-conversation", active: false, status: "complete" }
+    ],
+    snapshot: visibleSnapshot()
+  });
+  const originalGet = harness.context.chrome.storage.local.get;
+  let retainedReads = 0;
+  let activationInjected = false;
+  harness.context.chrome.storage.local.get = async (keys) => {
+    if (keys.includes(ChatGPTUsageConfig.storageKeys.retainedSignInTab)) {
+      retainedReads += 1;
+      if (retainedReads === 2 && !activationInjected) {
+        activationInjected = true;
+        await harness.setActiveTab(99);
+        await harness.setActiveTab(18);
+      }
+    }
+    return originalGet(keys);
+  };
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(activationInjected, true);
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 99), true);
+});
+
 test("refresh preserves a temporary tab navigated away during collection", async () => {
   let harness;
   harness = createBackgroundHarness({

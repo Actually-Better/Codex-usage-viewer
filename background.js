@@ -278,18 +278,21 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     await chrome.storage.local.set({ [storageKeys.state]: state });
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
-    if (chrome.tabs.onActivated && chrome.tabs.onActivated.removeListener) {
-      chrome.tabs.onActivated.removeListener(trackTemporaryTabActivation);
-    }
-    if (temporaryTab && analyticsTab && !keepTemporaryTab) {
-      await forgetRetainedSignInTab(analyticsTab.id);
-      const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
-      const extensionStillOwnsTab = currentTab
-        && !temporaryTabWasActivated
-        && !currentTab.active
-        && isCodexAnalyticsUrl(currentTab.url);
-      if (extensionStillOwnsTab) {
-        await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+    try {
+      if (temporaryTab && analyticsTab && !keepTemporaryTab) {
+        await forgetRetainedSignInTab(analyticsTab.id);
+        const currentTab = await chrome.tabs.get(analyticsTab.id).catch(() => null);
+        const extensionStillOwnsTab = currentTab
+          && !temporaryTabWasActivated
+          && !currentTab.active
+          && isCodexAnalyticsUrl(currentTab.url);
+        if (extensionStillOwnsTab) {
+          await chrome.tabs.remove(analyticsTab.id).catch(() => {});
+        }
+      }
+    } finally {
+      if (chrome.tabs.onActivated && chrome.tabs.onActivated.removeListener) {
+        chrome.tabs.onActivated.removeListener(trackTemporaryTabActivation);
       }
     }
   }
