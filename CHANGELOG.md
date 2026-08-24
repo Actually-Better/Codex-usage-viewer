@@ -4,7 +4,7 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
-- Stop opening Analytics when the popup merely opens; manual refresh now creates a visible temporary Analytics tab, reads it completely, closes only the tab created by the extension, and restores the previously active tab.
+- Stop opening Analytics when the popup merely opens; manual refresh now creates a visible temporary Analytics tab, reads it completely, closes only the tab created by the extension, and restores the previous tab only when the user has not switched elsewhere.
 - Keep an optional **Visit Analytics** button for explicit user navigation without making it a refresh prerequisite.
 - Reuse Analytics only when it is already the active page; from every other page, open a new visible temporary page even if Analytics exists in the background.
 - Give 15-minute refreshes the same visible temporary-tab fallback when Analytics is closed, fails, or returns no metrics, then return focus to the page the user was viewing; recreate the periodic alarm whenever the background worker starts if it is missing.

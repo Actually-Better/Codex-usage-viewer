@@ -240,8 +240,16 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
     if (temporaryTab && analyticsTab && !keepTemporaryTab) {
+      const activeTabsAtCleanup = await chrome.tabs.query({
+        active: true,
+        lastFocusedWindow: true
+      }).catch(() => []);
+      const temporaryTabStillActive = activeTabsAtCleanup.some((tab) => tab.id === analyticsTab.id);
       await chrome.tabs.remove(analyticsTab.id).catch(() => {});
-      if (previousActiveTab && previousActiveTab.id !== analyticsTab.id && chrome.tabs.update) {
+      if (temporaryTabStillActive
+        && previousActiveTab
+        && previousActiveTab.id !== analyticsTab.id
+        && chrome.tabs.update) {
         await chrome.tabs.update(previousActiveTab.id, { active: true }).catch(() => {});
       }
     }

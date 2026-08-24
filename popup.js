@@ -384,12 +384,12 @@
       warnings.push("The temporary Analytics tab remains open only so you can sign in safely through ChatGPT.");
     }
     if (state && state.status === "sign-in-required-manual-refresh") {
-      warnings.push("The scheduled sign-in tab was closed; use Refresh to reopen it without periodic focus changes.");
+      warnings.push("The scheduled sign-in tab was closed; use Refresh to reopen it for sign-in.");
     }
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");
     }
-    warnings.push("Usage is read from the rendered Codex Analytics UI, with a temporary inactive tab as fallback.");
+    warnings.push("Usage is read from the rendered Codex Analytics UI; outside the active Analytics page, collection temporarily opens a visible tab.");
     return warnings;
   }
 

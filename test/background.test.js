@@ -15,6 +15,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
   const listeners = {};
   let alarmExists = existingAlarm;
+  let openTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
     runtime: {
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
@@ -42,22 +43,29 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     },
     tabs: {
       async query(queryInfo = {}) {
-        return queryInfo.active ? tabs.filter((tab) => tab.active) : tabs;
+        return queryInfo.active ? openTabs.filter((tab) => tab.active) : openTabs;
       },
       async create(args) {
         calls.create += 1;
         calls.createArgs.push(args);
         if (createError) throw createError;
-        return { id: 99, url: args.url, status: "complete" };
+        if (args.active) openTabs = openTabs.map((tab) => ({ ...tab, active: false }));
+        const createdTab = { id: 99, url: args.url, active: Boolean(args.active), status: "complete" };
+        openTabs.push(createdTab);
+        return createdTab;
       },
       async remove(tabId) {
         calls.remove += 1;
         calls.removedTabIds.push(tabId);
+        openTabs = openTabs.filter((tab) => tab.id !== tabId);
       },
       async update(tabId, args) {
         calls.update += 1;
         calls.updateArgs.push({ tabId, ...args });
-        return { id: tabId, ...args };
+        if (args.active) openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
+        const updatedTab = openTabs.find((tab) => tab.id === tabId) || { id: tabId };
+        Object.assign(updatedTab, args);
+        return updatedTab;
       },
       async sendMessage(tabId, message) {
         calls.sendMessage += 1;
@@ -90,6 +98,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     calls,
     context,
     storage,
+    setActiveTab(tabId) {
+      openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
+    },
     run(expression) {
       return vm.runInContext(expression, context);
     }
@@ -145,6 +156,26 @@ test("popup refresh visibly opens a temporary Analytics tab and closes it after 
   assert.equal(harness.calls.remove, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 17, active: true }]);
+});
+
+test("refresh does not override a tab selected by the user during collection", async () => {
+  let harness;
+  harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/starting-page", active: true, status: "complete" },
+      { id: 18, url: "https://chatgpt.com/c/user-selected-page", active: false, status: "complete" }
+    ],
+    snapshot(callNumber) {
+      if (callNumber === 1) harness.setActiveTab(18);
+      return visibleSnapshot();
+    }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.calls.update, 0);
 });
 
 test("periodic refresh creates a real temporary Analytics tab when none is open", async () => {
