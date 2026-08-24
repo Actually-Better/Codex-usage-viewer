@@ -7,10 +7,13 @@ const vm = require("node:vm");
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
+    [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: localRetainedSignInTabId
+  };
+  const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
   const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
@@ -42,6 +45,14 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         },
         async set(values) {
           Object.assign(storage, values);
+        }
+      },
+      session: {
+        async get(keys) {
+          return Object.fromEntries(keys.map((key) => [key, sessionStorage[key]]));
+        },
+        async set(values) {
+          Object.assign(sessionStorage, values);
         }
       }
     },
@@ -78,6 +89,11 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         if (args.active) openTabs = openTabs.map((tab) => ({ ...tab, active: tab.id === tabId }));
         const updatedTab = openTabs.find((tab) => tab.id === tabId) || { id: tabId };
         Object.assign(updatedTab, args);
+        if (args.url) {
+          for (const listener of tabUpdatedListeners) {
+            listener(tabId, { url: args.url }, { ...updatedTab });
+          }
+        }
         if (args.active) {
           await Promise.all([...tabActivatedListeners].map((listener) => (
             listener({ tabId, windowId: updatedTab.windowId })
@@ -127,6 +143,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   return {
     calls,
     context,
+    sessionStorage,
     storage,
     getOpenTabs() {
       return openTabs.map((tab) => ({ ...tab }));
@@ -268,10 +285,10 @@ test("refresh tracks adoption until asynchronous cleanup finishes", async () => 
     ],
     snapshot: visibleSnapshot()
   });
-  const originalGet = harness.context.chrome.storage.local.get;
+  const originalGet = harness.context.chrome.storage.session.get;
   let retainedReads = 0;
   let activationInjected = false;
-  harness.context.chrome.storage.local.get = async (keys) => {
+  harness.context.chrome.storage.session.get = async (keys) => {
     if (keys.includes(ChatGPTUsageConfig.storageKeys.retainedSignInTab)) {
       retainedReads += 1;
       if (retainedReads === 2 && !activationInjected) {
@@ -397,7 +414,7 @@ test("a temporary Analytics tab remains open only when ChatGPT requires sign-in"
   assert.equal(harness.calls.remove, 0);
   assert.equal(harness.calls.update, 0);
   assert.equal(harness.getOpenTabs().find((tab) => tab.id === 99).active, false);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
 });
 
 test("repeated logged-out refreshes reuse one retained background sign-in tab", async () => {
@@ -426,7 +443,65 @@ test("repeated logged-out refreshes reuse one retained background sign-in tab", 
     harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
     1
   );
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+});
+
+test("automatic sign-in redirects remain owned and are returned to Analytics", async () => {
+  const loggedOutSnapshot = {
+    status: "ok",
+    hostname: "chatgpt.com",
+    pathCategory: "other",
+    loginStatus: "logged-out",
+    codexAnalytics: { pageDetected: false },
+    domUsageVisible: false,
+    usage: {}
+  };
+  let harness;
+  let redirected = false;
+  harness = createBackgroundHarness({
+    tabs: [{ id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }],
+    snapshot() {
+      if (!redirected) {
+        redirected = true;
+        harness.setTabUrl(99, "https://chatgpt.com/auth/login");
+      }
+      return loggedOutSnapshot;
+    }
+  });
+
+  await harness.run("refreshForPopup()");
+  const secondResult = await harness.run("refreshForPopup()");
+
+  assert.equal(secondResult.state.status, "sign-in-required");
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.updateArgs, [{
+    tabId: 99,
+    url: "https://chatgpt.com/codex/cloud/settings/analytics",
+    active: false
+  }]);
+  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.match(harness.getOpenTabs().find((tab) => tab.id === 99).url, /settings\/analytics/);
+});
+
+test("a local tab ID from an earlier browser session is never trusted", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: false, status: "complete" }
+    ],
+    snapshot: visibleSnapshot(),
+    localRetainedSignInTabId: 42
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 42);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("a retained sign-in tab is removed after authentication succeeds", async () => {
@@ -452,7 +527,7 @@ test("a retained sign-in tab is removed after authentication succeeds", async ()
   assert.equal(authenticatedResult.state.status, "usage-current");
   assert.equal(harness.calls.create, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("activating a retained sign-in tab transfers ownership between refreshes", async () => {
@@ -467,7 +542,7 @@ test("activating a retained sign-in tab transfers ownership between refreshes", 
   await harness.setActiveTab(42);
   await harness.setActiveTab(17);
 
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
   assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
 });
 
@@ -479,13 +554,13 @@ test("concurrent release cannot erase a newly retained sign-in tab", async () =>
     ],
     retainedSignInTabId: 42
   });
-  const originalGet = harness.context.chrome.storage.local.get;
+  const originalGet = harness.context.chrome.storage.session.get;
   let releaseFirstRead;
   let signalFirstRead;
   const firstReadStarted = new Promise((resolve) => { signalFirstRead = resolve; });
   const firstReadReleased = new Promise((resolve) => { releaseFirstRead = resolve; });
   let retainedReads = 0;
-  harness.context.chrome.storage.local.get = async (keys) => {
+  harness.context.chrome.storage.session.get = async (keys) => {
     const result = await originalGet(keys);
     if (keys.includes(ChatGPTUsageConfig.storageKeys.retainedSignInTab)) {
       retainedReads += 1;
@@ -503,7 +578,7 @@ test("concurrent release cannot erase a newly retained sign-in tab", async () =>
   releaseFirstRead();
   await Promise.all([releaseOwnership, retainReplacement]);
 
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
 });
 
 test("an active retained Analytics tab becomes user-owned and is never removed", async () => {
@@ -518,7 +593,7 @@ test("an active retained Analytics tab becomes user-owned and is never removed",
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.create, 0);
   assert.equal(harness.calls.remove, 0);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("a periodic logged-out refresh closes its temporary tab without stealing focus", async () => {
@@ -541,6 +616,24 @@ test("a periodic logged-out refresh closes its temporary tab without stealing fo
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.update, 0);
   assert.equal(harness.calls.remove, 1);
+});
+
+test("a successful periodic refresh removes an extension-owned sign-in tab", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [
+      { id: 17, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" },
+      { id: 42, url: "https://chatgpt.com/auth/login", active: false, status: "complete" }
+    ],
+    snapshot: visibleSnapshot(),
+    retainedSignInTabId: 42
+  });
+
+  const result = await harness.run('refreshOnce("alarm")');
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [42, 99]);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("scheduled sign-in status preserves a newer stored usage snapshot", async () => {
@@ -639,7 +732,7 @@ test("a popup joining an alarm keeps the older retained sign-in tab", async () =
   assert.equal(results[1].state.status, "sign-in-required");
   assert.equal(harness.calls.create, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 42);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 42);
   assert.equal(
     harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
     1
@@ -677,7 +770,7 @@ test("adopting an older retained tab during replacement preserves it as user-own
   const retainedTabId = await replacement;
 
   assert.equal(retainedTabId, 99);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
   assert.deepEqual(harness.calls.removedTabIds, []);
   assert.equal(harness.getOpenTabs().some((tab) => tab.id === 42), true);
   assert.equal(harness.getOpenTabs().some((tab) => tab.id === 99), true);
@@ -770,7 +863,7 @@ test("Visit Analytics focuses an existing page instead of duplicating it", async
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 42, active: true }]);
   assert.deepEqual(harness.calls.windowUpdateArgs, [{ windowId: 5, focused: true }]);
   assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [42]);
-  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
+  assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
 test("Visit Analytics creates a focused active page when none exists", async () => {
