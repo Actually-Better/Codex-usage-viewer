@@ -270,6 +270,13 @@ test("a popup joining during the scheduled sign-in write still keeps the tempora
     }
   });
   const originalSet = harness.context.chrome.storage.local.set;
+  const newerSnapshot = visibleSnapshot();
+  const newerCollectedState = {
+    snapshot: newerSnapshot,
+    status: "usage-current",
+    dataCollectedAt: "2026-08-24T10:05:00.000Z",
+    lastRefreshAt: "2026-08-24T10:05:00.000Z"
+  };
   let releaseManualWrite;
   let signalManualWrite;
   const manualWriteStarted = new Promise((resolve) => { signalManualWrite = resolve; });
@@ -279,6 +286,9 @@ test("a popup joining during the scheduled sign-in write still keeps the tempora
     if (state && state.status === "sign-in-required-manual-refresh") {
       signalManualWrite();
       await manualWriteReleased;
+      await originalSet(values);
+      harness.storage[ChatGPTUsageConfig.storageKeys.state] = newerCollectedState;
+      return;
     }
     return originalSet(values);
   };
@@ -292,6 +302,9 @@ test("a popup joining during the scheduled sign-in write still keeps the tempora
   assert.equal(results[0].state.status, "sign-in-required");
   assert.equal(results[1].state.status, "sign-in-required");
   assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.state].status, "sign-in-required");
+  assert.deepEqual(harness.storage[ChatGPTUsageConfig.storageKeys.state].snapshot, newerSnapshot);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.state].dataCollectedAt, "2026-08-24T10:05:00.000Z");
+  assert.equal(results[0].state.lastRefreshAt, "2026-08-24T10:05:00.000Z");
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.update, 1);
   assert.equal(harness.calls.remove, 0);

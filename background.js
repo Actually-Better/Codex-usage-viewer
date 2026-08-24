@@ -280,8 +280,15 @@ async function markManualSignInRequired(result) {
 }
 
 async function restoreRetainedSignInRequired(result) {
-  await chrome.storage.local.set({ [storageKeys.state]: result.state });
-  return result;
+  const stored = await chrome.storage.local.get([storageKeys.state]);
+  const currentState = stored[storageKeys.state] || result.state;
+  const state = {
+    ...currentState,
+    status: result.state.status,
+    diagnostic: result.state.diagnostic
+  };
+  await chrome.storage.local.set({ [storageKeys.state]: state });
+  return { ...result, state };
 }
 
 async function markRefreshStarted(reason) {
