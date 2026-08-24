@@ -4,7 +4,8 @@
   const CONFIG = {
     storageKeys: {
       state: "chatgptUsageMonitor.state",
-      counters: "chatgptUsageMonitor.counters"
+      counters: "chatgptUsageMonitor.counters",
+      compactMode: "chatgptUsageMonitor.compactMode"
     },
     refreshAlarmName: "chatgpt-usage-monitor-refresh",
     refreshPeriodMinutes: 15,

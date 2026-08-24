@@ -4,6 +4,7 @@
   const refreshButton = document.getElementById("refreshButton");
   const openUsageButton = document.getElementById("openUsageButton");
   const copyDiagnosticsButton = document.getElementById("copyDiagnosticsButton");
+  const compactModeToggle = document.getElementById("compactModeToggle");
   const statusTitle = document.getElementById("statusTitle");
   const statusDetail = document.getElementById("statusDetail");
   const statusAge = document.getElementById("statusAge");
@@ -14,15 +15,42 @@
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
   copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
+  compactModeToggle.addEventListener("change", saveCompactMode);
 
-  renderLoading();
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const stateChange = changes[ChatGPTUsageConfig.storageKeys.state];
     if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
+    const compactModeChange = changes[ChatGPTUsageConfig.storageKeys.compactMode];
+    if (compactModeChange) applyCompactMode(Boolean(compactModeChange.newValue));
   });
-  loadCachedState();
+  initializePopup();
   setInterval(updateRefreshAge, 30000);
+
+  async function initializePopup() {
+    const compactModeKey = ChatGPTUsageConfig.storageKeys.compactMode;
+    try {
+      const preferences = await chrome.storage.local.get([compactModeKey]);
+      applyCompactMode(Boolean(preferences[compactModeKey]));
+    } catch {
+      applyCompactMode(false);
+    }
+    renderLoading();
+    await loadCachedState();
+  }
+
+  function applyCompactMode(enabled) {
+    document.body.classList.toggle("compact", enabled);
+    compactModeToggle.checked = enabled;
+  }
+
+  async function saveCompactMode() {
+    const enabled = compactModeToggle.checked;
+    applyCompactMode(enabled);
+    await chrome.storage.local.set({
+      [ChatGPTUsageConfig.storageKeys.compactMode]: enabled
+    });
+  }
 
   async function loadCachedState() {
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
@@ -88,10 +116,10 @@
 
     if (state && state.status === "sign-in-required-manual-refresh") {
       statusTitle.textContent = "Sign in required";
-      statusDetail.textContent = "Click Refresh to open Analytics, then sign in through ChatGPT.";
+      statusDetail.textContent = "Click Refresh, then open the background Analytics tab to sign in through ChatGPT.";
     } else if (state && state.status === "sign-in-required") {
       statusTitle.textContent = "Sign in required";
-      statusDetail.textContent = "The Analytics tab was left open so you can sign in through ChatGPT, then refresh again.";
+      statusDetail.textContent = "The background Analytics tab was left open so you can sign in through ChatGPT, then refresh again.";
     } else if (snapshot && snapshot.loginStatus === "logged-out") {
       statusTitle.textContent = "Sign in required";
       statusDetail.textContent = "Sign in using ChatGPT. This extension never asks for passwords.";
@@ -99,7 +127,7 @@
       statusTitle.textContent = "Refreshing usage";
       statusDetail.textContent = hasVisibleUsage
         ? "Checking for newer values; the last collected usage remains visible."
-        : "Reading Analytics and opening a temporary fallback page if needed.";
+        : "Reading Analytics in a temporary background tab if needed.";
     } else if (state && state.status === "analytics-no-new-data") {
       statusTitle.textContent = hasVisibleUsage ? "Showing cached usage" : "Analytics loaded";
       statusDetail.textContent = hasVisibleUsage
@@ -194,6 +222,17 @@
     const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
     const card = document.createElement("div");
     card.className = "metric-card";
+    const hasRemainingPercent = typeof structured.remainingPercent === "number";
+    const remainingPercent = hasRemainingPercent
+      ? Math.max(0, Math.min(100, structured.remainingPercent))
+      : null;
+    const usageLevel = hasRemainingPercent
+      ? ChatGPTUsageModel.getUsageLevel(remainingPercent) || "green"
+      : null;
+    if (hasRemainingPercent) {
+      card.classList.add("percentage-metric", `usage-${usageLevel}`);
+      card.style.setProperty("--metric-percent", `${remainingPercent}%`);
+    }
 
     const head = document.createElement("div");
     head.className = "metric-head";
@@ -204,26 +243,27 @@
 
     const value = document.createElement("div");
     value.className = "metric-value";
-    if (typeof structured.remainingPercent === "number") {
-      value.textContent = `${structured.remainingPercent}%`;
+    const valueText = document.createElement("span");
+    valueText.className = "metric-value-text";
+    if (hasRemainingPercent) {
+      valueText.textContent = `${structured.remainingPercent}%`;
     } else if (typeof structured.remainingCredits === "number") {
-      value.textContent = String(structured.remainingCredits);
+      valueText.textContent = String(structured.remainingCredits);
     } else if (typeof structured.bankedResetCount === "number") {
-      value.textContent = String(structured.bankedResetCount);
+      valueText.textContent = String(structured.bankedResetCount);
     } else {
-      value.textContent = "Visible";
+      valueText.textContent = "Visible";
     }
+    value.append(valueText);
 
     head.append(title, value);
     card.append(head);
 
-    if (typeof structured.remainingPercent === "number") {
+    if (hasRemainingPercent) {
       const progress = document.createElement("div");
       progress.className = "progress";
       const fill = document.createElement("div");
-      const remainingPercent = Math.max(0, Math.min(100, structured.remainingPercent));
-      const usageLevel = ChatGPTUsageModel.getUsageLevel(remainingPercent);
-      fill.className = `progress-fill ${usageLevel || "green"}`;
+      fill.className = `progress-fill ${usageLevel}`;
 
       fill.style.width = `${remainingPercent}%`;
       progress.append(fill);
@@ -381,7 +421,7 @@
       warnings.push("Analytics responded successfully, but no new usage values were detected during this attempt.");
     }
     if (state && state.status === "sign-in-required") {
-      warnings.push("The temporary Analytics tab remains open only so you can sign in safely through ChatGPT.");
+      warnings.push("The temporary Analytics tab remains open in the background only so you can sign in safely through ChatGPT.");
     }
     if (state && state.status === "sign-in-required-manual-refresh") {
       warnings.push("The scheduled sign-in tab was closed; use Refresh to reopen it for sign-in.");
@@ -389,7 +429,7 @@
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");
     }
-    warnings.push("Usage is read from the rendered Codex Analytics UI; outside the active Analytics page, collection temporarily opens a visible tab.");
+    warnings.push("Usage is read from the rendered Codex Analytics UI; outside the active Analytics page, collection temporarily opens a background tab without changing focus.");
     return warnings;
   }
 

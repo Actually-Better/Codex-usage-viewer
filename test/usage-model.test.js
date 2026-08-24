@@ -3,7 +3,14 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { test } = require("node:test");
 
-const { ChatGPTUsageModel } = require("../usage-model.js");
+const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
+
+test("configuration provides a persistent compact-mode preference key", () => {
+  assert.equal(
+    ChatGPTUsageConfig.storageKeys.compactMode,
+    "chatgptUsageMonitor.compactMode"
+  );
+});
 
 test("formatRelativeTime presents friendly refresh ages", () => {
   const now = Date.parse("2026-08-24T12:00:00.000Z");

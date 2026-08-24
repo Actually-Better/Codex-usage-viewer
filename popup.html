@@ -80,6 +80,61 @@
         line-height: 1.2;
       }
 
+      .compact-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        user-select: none;
+      }
+
+      .compact-toggle input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+      }
+
+      .toggle-track {
+        position: relative;
+        width: 32px;
+        height: 18px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--border);
+        transition: background 120ms ease, border-color 120ms ease;
+      }
+
+      .toggle-track::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--panel);
+        box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+        transition: transform 120ms ease;
+      }
+
+      .compact-toggle input:checked + .toggle-track {
+        border-color: var(--ok);
+        background: var(--ok);
+      }
+
+      .compact-toggle input:checked + .toggle-track::after {
+        transform: translateX(14px);
+      }
+
+      .compact-toggle input:focus-visible + .toggle-track {
+        outline: 2px solid var(--ok);
+        outline-offset: 2px;
+      }
+
       button {
         border: 1px solid var(--border);
         border-radius: 6px;
@@ -302,6 +357,109 @@
         text-align: right;
       }
 
+      body.compact .metric-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      body.compact #chatgptSection {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      body.compact #chatgptSection .row {
+        grid-template-columns: 1fr;
+        gap: 3px;
+        min-width: 0;
+        border-top: 0;
+        padding: 8px;
+      }
+
+      body.compact #chatgptSection .row + .row {
+        border-left: 1px solid var(--border);
+      }
+
+      body.compact .metric-card {
+        min-width: 0;
+        padding: 9px 8px 8px;
+      }
+
+      body.compact .metric-card:nth-child(-n + 2) {
+        border-top: 0;
+      }
+
+      body.compact .metric-card:nth-child(odd) {
+        border-right: 1px solid var(--border);
+      }
+
+      body.compact .metric-head {
+        gap: 6px;
+      }
+
+      body.compact .metric-title {
+        font-size: 11px;
+      }
+
+      body.compact .metric-value {
+        font-size: 17px;
+      }
+
+      body.compact .percentage-metric .metric-head {
+        align-items: center;
+      }
+
+      body.compact .percentage-metric .metric-value {
+        position: relative;
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: conic-gradient(
+          from -90deg,
+          var(--metric-color) var(--metric-percent),
+          var(--border) 0
+        );
+        font-size: 11px;
+        text-align: center;
+      }
+
+      body.compact .percentage-metric .metric-value::before {
+        content: "";
+        position: absolute;
+        inset: 4px;
+        border-radius: 50%;
+        background: var(--panel);
+      }
+
+      body.compact .percentage-metric .metric-value-text {
+        position: relative;
+        z-index: 1;
+      }
+
+      body.compact .percentage-metric.usage-green {
+        --metric-color: var(--green);
+      }
+
+      body.compact .percentage-metric.usage-amber {
+        --metric-color: var(--amber);
+      }
+
+      body.compact .percentage-metric.usage-red {
+        --metric-color: var(--red);
+      }
+
+      body.compact .percentage-metric .progress {
+        display: none;
+      }
+
+      body.compact .metric-reset {
+        font-size: 11px;
+        margin-top: 5px;
+        text-align: left;
+        overflow-wrap: anywhere;
+      }
+
       .foot {
         color: var(--muted);
         font-size: 12px;
@@ -320,6 +478,11 @@
     <div class="shell">
       <header>
         <h1>Codex Usage Viewer</h1>
+        <label class="compact-toggle" for="compactModeToggle">
+          <span>Compact</span>
+          <input id="compactModeToggle" type="checkbox" role="switch">
+          <span class="toggle-track" aria-hidden="true"></span>
+        </label>
       </header>
 
       <div class="status">
