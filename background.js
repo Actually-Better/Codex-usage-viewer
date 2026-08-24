@@ -9,6 +9,7 @@ const ANALYTICS_STABLE_READS_REQUIRED = 5;
 const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
 let analyticsRefreshPromise = null;
+let analyticsRefreshContext = null;
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureRefreshAlarm();
@@ -139,15 +140,19 @@ async function openCodexAnalyticsPage() {
 
 async function refreshOnce(reason) {
   if (!analyticsRefreshPromise) {
-    analyticsRefreshPromise = refreshFromAnalyticsPage(reason)
+    analyticsRefreshContext = { popupRequested: reason === "popup" };
+    analyticsRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
       .finally(() => {
         analyticsRefreshPromise = null;
+        analyticsRefreshContext = null;
       });
+  } else if (reason === "popup" && analyticsRefreshContext) {
+    analyticsRefreshContext.popupRequested = true;
   }
   return analyticsRefreshPromise;
 }
 
-async function refreshFromAnalyticsPage(reason) {
+async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequested: reason === "popup" }) {
   const tabs = await chrome.tabs.query({
     url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
   });
@@ -184,16 +189,20 @@ async function refreshFromAnalyticsPage(reason) {
       try {
         analyticsTab = await createTemporaryAnalyticsTab();
       } catch (error) {
-        return preserveResponsiveResult(responsiveResult, error);
+        return preserveResponsiveResult(responsiveResult, error, "create");
       }
       temporaryTab = true;
       failureStage = "read-temporary";
-      result = await readAnalyticsTab(analyticsTab.id);
+      try {
+        result = await readAnalyticsTab(analyticsTab.id);
+      } catch (error) {
+        return preserveResponsiveResult(responsiveResult, error, "read");
+      }
     }
 
     keepTemporaryTab = temporaryTab
       && result.pageLoginStatus === "logged-out"
-      && reason === "popup";
+      && refreshContext.popupRequested;
     if (keepTemporaryTab && chrome.tabs.update) {
       await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
     }
@@ -233,10 +242,13 @@ async function readAnalyticsTab(tabId) {
   return requestSnapshotWithRetry(tabId);
 }
 
-async function preserveResponsiveResult(result, fallbackError) {
+async function preserveResponsiveResult(result, fallbackError, failureStage) {
+  const fallbackAction = failureStage === "read"
+    ? "could not be read"
+    : "could not be created";
   const state = {
     ...result.state,
-    diagnostic: `${result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback could not be created.`,
+    diagnostic: `${result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback ${fallbackAction}.`,
     fallbackDiagnostic: String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError)
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });

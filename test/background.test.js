@@ -234,6 +234,29 @@ test("a periodic logged-out existing page does not create another fallback tab",
   assert.equal(harness.calls.remove, 0);
 });
 
+test("a popup joining a periodic logged-out refresh keeps the temporary tab for sign-in", async () => {
+  const harness = createBackgroundHarness({
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-out",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    }
+  });
+
+  const results = await harness.run('Promise.all([refreshOnce("alarm"), refreshForPopup()])');
+
+  assert.equal(results[0].state.status, "sign-in-required");
+  assert.equal(results[1].state.status, "sign-in-required");
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.update, 1);
+  assert.equal(harness.calls.remove, 0);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 99, active: true }]);
+});
+
 test("a non-Analytics page cannot overwrite a valid usage snapshot", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
@@ -379,6 +402,39 @@ test("failure to create an optional fallback preserves the responsive incomplete
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 0);
+});
+
+test("failure to read an optional fallback preserves the responsive incomplete result", async () => {
+  const cached = visibleSnapshot();
+  const emptySnapshot = {
+    status: "ok",
+    hostname: "chatgpt.com",
+    pathCategory: "codex",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  };
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot(_callNumber, tabId) {
+      if (tabId === 42) return emptySnapshot;
+      throw new Error("Temporary reader unavailable");
+    },
+    initialState: { snapshot: cached, dataCollectedAt: cached.collectedAt }
+  });
+
+  const result = await harness.run("refreshForPopup()");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fresh, false);
+  assert.equal(result.fallbackFailed, true);
+  assert.equal(result.state.status, "analytics-no-new-data");
+  assert.match(result.state.diagnostic, /optional temporary fallback could not be read/i);
+  assert.match(result.state.fallbackDiagnostic, /Temporary reader unavailable/);
+  assert.deepEqual(result.state.snapshot, cached);
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.remove, 1);
 });
 
 test("refresh waits for late usage cards before saving the page snapshot", async () => {
