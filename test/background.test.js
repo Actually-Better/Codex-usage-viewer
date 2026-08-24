@@ -189,6 +189,51 @@ test("a temporary Analytics tab remains open only when ChatGPT requires sign-in"
   assert.deepEqual(harness.calls.updateArgs, [{ tabId: 99, active: true }]);
 });
 
+test("a periodic logged-out refresh closes its temporary tab without stealing focus", async () => {
+  const harness = createBackgroundHarness({
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-out",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    }
+  });
+
+  const result = await harness.run('refreshOnce("alarm")');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.status, "sign-in-required");
+  assert.equal(harness.calls.create, 1);
+  assert.equal(harness.calls.update, 0);
+  assert.equal(harness.calls.remove, 1);
+});
+
+test("a periodic logged-out existing page does not create another fallback tab", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
+    snapshot: {
+      status: "ok",
+      hostname: "chatgpt.com",
+      pathCategory: "codex",
+      loginStatus: "logged-out",
+      codexAnalytics: { pageDetected: true },
+      domUsageVisible: false,
+      usage: {}
+    }
+  });
+
+  const result = await harness.run('refreshOnce("alarm")');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.status, "sign-in-required");
+  assert.equal(harness.calls.create, 0);
+  assert.equal(harness.calls.update, 0);
+  assert.equal(harness.calls.remove, 0);
+});
+
 test("a non-Analytics page cannot overwrite a valid usage snapshot", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
@@ -306,7 +351,7 @@ test("refresh failure requires both the existing and temporary Analytics readers
   assert.equal(harness.calls.remove, 1);
 });
 
-test("failure to create the fallback tab is reported as a real load failure", async () => {
+test("failure to create an optional fallback preserves the responsive incomplete result", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", status: "complete" }],
@@ -325,10 +370,12 @@ test("failure to create the fallback tab is reported as a real load failure", as
 
   const result = await harness.run("refreshForPopup()");
 
-  assert.equal(result.ok, false);
-  assert.equal(result.state.status, "codex-analytics-load-failed");
-  assert.match(result.state.diagnostic, /could not create the temporary/i);
-  assert.match(result.error, /Tabs cannot be created/);
+  assert.equal(result.ok, true);
+  assert.equal(result.fresh, false);
+  assert.equal(result.fallbackFailed, true);
+  assert.equal(result.state.status, "analytics-no-new-data");
+  assert.match(result.state.diagnostic, /optional temporary fallback could not be created/i);
+  assert.match(result.state.fallbackDiagnostic, /Tabs cannot be created/);
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 0);

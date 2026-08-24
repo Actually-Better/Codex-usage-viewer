@@ -177,16 +177,23 @@ async function refreshFromAnalyticsPage(reason) {
       result = await readAnalyticsTab(analyticsTab.id);
     }
 
-    if (!temporaryTab && result.fresh === false) {
+    if (!temporaryTab && result.fresh === false && result.pageLoginStatus !== "logged-out") {
+      const responsiveResult = result;
       await markRefreshStarted(`${reason}-temporary-fallback`);
       failureStage = "create-temporary";
-      analyticsTab = await createTemporaryAnalyticsTab();
+      try {
+        analyticsTab = await createTemporaryAnalyticsTab();
+      } catch (error) {
+        return preserveResponsiveResult(responsiveResult, error);
+      }
       temporaryTab = true;
       failureStage = "read-temporary";
       result = await readAnalyticsTab(analyticsTab.id);
     }
 
-    keepTemporaryTab = temporaryTab && result.pageLoginStatus === "logged-out";
+    keepTemporaryTab = temporaryTab
+      && result.pageLoginStatus === "logged-out"
+      && reason === "popup";
     if (keepTemporaryTab && chrome.tabs.update) {
       await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
     }
@@ -224,6 +231,16 @@ async function createTemporaryAnalyticsTab() {
 async function readAnalyticsTab(tabId) {
   await waitForTabReadyOrDelay(tabId);
   return requestSnapshotWithRetry(tabId);
+}
+
+async function preserveResponsiveResult(result, fallbackError) {
+  const state = {
+    ...result.state,
+    diagnostic: `${result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback could not be created.`,
+    fallbackDiagnostic: String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError)
+  };
+  await chrome.storage.local.set({ [storageKeys.state]: state });
+  return { ...result, state, fallbackFailed: true };
 }
 
 async function markRefreshStarted(reason) {
