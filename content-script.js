@@ -1,9 +1,11 @@
 (function initContentScript() {
   "use strict";
 
-  const EXTRACTOR_VERSION = "codex-analytics-v5";
+  const EXTRACTOR_VERSION = "codex-analytics-v7";
   const SEND_COOLDOWN_MS = 1500;
   let lastSendAt = 0;
+  let snapshotTimer = null;
+  let lastSnapshotSignature = null;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message && message.type === "usage:collectSnapshot") {
@@ -18,9 +20,34 @@
     recordMessageSent();
   }, true);
 
-  setTimeout(() => {
-    chrome.runtime.sendMessage({ type: "usage:contentSnapshot", payload: collectSnapshot() }).catch(() => {});
-  }, 1200);
+  scheduleSnapshotDelivery(1200);
+  observeAnalyticsChanges();
+
+  function observeAnalyticsChanges() {
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    const observer = new MutationObserver(() => {
+      if (isCodexAnalyticsUsagePage()) scheduleSnapshotDelivery(500);
+    });
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+  }
+
+  function scheduleSnapshotDelivery(delayMs) {
+    if (snapshotTimer) return;
+    snapshotTimer = setTimeout(() => {
+      snapshotTimer = null;
+      const snapshot = collectSnapshot();
+      const signature = JSON.stringify({
+        pathCategory: snapshot.pathCategory,
+        loginStatus: snapshot.loginStatus,
+        plan: snapshot.plan,
+        usage: snapshot.usage
+      });
+      if (signature === lastSnapshotSignature) return;
+      lastSnapshotSignature = signature;
+      chrome.runtime.sendMessage({ type: "usage:contentSnapshot", payload: snapshot }).catch(() => {});
+    }, delayMs);
+  }
 
   function recordMessageSent() {
     const now = Date.now();
@@ -36,13 +63,21 @@
   }
 
   function collectSnapshot() {
+    const analyticsDom = isCodexAnalyticsUsagePage() ? collectCodexAnalyticsDom() : null;
     const safeText = collectSafeUiText();
     const sessionSignals = collectSessionSignals(safeText);
     const loginStatus = detectLoginStatus(safeText, sessionSignals);
     const plan = detectPlan(safeText);
-    const usage = extractUsage(safeText);
+    const fallbackUsage = extractUsage(safeText);
+    const structuredUsage = analyticsDom && analyticsDom.text
+      ? extractUsage(analyticsDom.text)
+      : null;
+    const usage = mergeUsageFields(fallbackUsage, structuredUsage);
+    const diagnosticText = analyticsDom && analyticsDom.text
+      ? `${analyticsDom.text}\n${safeText}`
+      : safeText;
     const codexAnalytics = isCodexAnalyticsUsagePage()
-      ? collectCodexAnalyticsDiagnostics(safeText, usage)
+      ? collectCodexAnalyticsDiagnostics(diagnosticText, usage, analyticsDom)
       : null;
 
     return {
@@ -85,7 +120,7 @@
     const parts = new Set();
     if (isCodexAnalyticsUsagePage()) {
       const mainText = getElementText(document.querySelector("main") || document.body);
-      if (mainText) parts.add(mainText.slice(0, 12000));
+      if (mainText) parts.add(mainText.slice(0, 16000));
     }
 
     for (const selector of selectors) {
@@ -99,7 +134,139 @@
       }
     }
 
-    return Array.from(parts).join("\n").slice(0, 8000);
+    return Array.from(parts).join("\n").slice(0, 24000);
+  }
+
+  function mergeUsageFields(fallbackUsage, structuredUsage) {
+    const merged = { ...(fallbackUsage || {}) };
+    for (const [key, field] of Object.entries(structuredUsage || {})) {
+      if (field && field.value) merged[key] = field;
+      else if (!(key in merged)) merged[key] = field;
+    }
+    return merged;
+  }
+
+  function collectCodexAnalyticsDom(targetDocument = document) {
+    const main = targetDocument.querySelector("main") || targetDocument.body;
+    if (!main) return emptyAnalyticsDomSignals(targetDocument);
+
+    const containers = new Set();
+    const anchors = main.querySelectorAll([
+      "h1", "h2", "h3", "h4", "h5", "h6",
+      '[role="heading"]', "dt", "dd", "p", "span", "button",
+      '[data-testid*="usage" i]', '[data-testid*="limit" i]',
+      '[data-testid*="credit" i]', '[data-testid*="reset" i]'
+    ].join(","));
+
+    for (const element of anchors) {
+      const anchorText = getOwnElementText(element);
+      if (!anchorText || anchorText.length > 240 || !isLikelyUsageText(anchorText)) continue;
+      containers.add(findBoundedUsageContainer(element, main));
+      if (containers.size >= 80) break;
+    }
+
+    const parts = new Set();
+    let progressbarCount = 0;
+    let ariaValueCount = 0;
+    let timeElementCount = 0;
+
+    for (const container of containers) {
+      const text = getElementText(container);
+      if (text) parts.add(text.slice(0, 1600));
+
+      const accessible = [container, ...container.querySelectorAll([
+        '[role="progressbar"]', "[aria-valuenow]", "[aria-valuetext]",
+        "[aria-label]", "time[datetime]"
+      ].join(","))];
+      for (const element of accessible) {
+        const signals = getAccessibleValueSignals(element, targetDocument);
+        for (const signal of signals.values) parts.add(signal);
+        if (signals.progressbar) progressbarCount += 1;
+        if (signals.ariaValue) ariaValueCount += 1;
+        if (signals.timeElement) timeElementCount += 1;
+      }
+    }
+
+    return {
+      text: Array.from(parts).join("\n").slice(0, 16000),
+      relevantContainerCount: containers.size,
+      progressbarCount,
+      ariaValueCount,
+      timeElementCount,
+      mainTextLength: getElementText(main).length,
+      readyState: targetDocument.readyState
+    };
+  }
+
+  function emptyAnalyticsDomSignals(targetDocument = document) {
+    return {
+      text: "",
+      relevantContainerCount: 0,
+      progressbarCount: 0,
+      ariaValueCount: 0,
+      timeElementCount: 0,
+      mainTextLength: 0,
+      readyState: targetDocument.readyState
+    };
+  }
+
+  function findBoundedUsageContainer(element, main) {
+    let current = element;
+    let best = element;
+    while (current.parentElement && current.parentElement !== main) {
+      const parent = current.parentElement;
+      const text = getElementText(parent);
+      if (!text || text.length > 1600) break;
+      best = parent;
+      current = parent;
+    }
+    return best;
+  }
+
+  function getOwnElementText(element) {
+    const directText = Array.from(element.childNodes || [])
+      .filter((node) => node.nodeType === 3)
+      .map((node) => node.textContent || "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return directText || String(element.getAttribute("aria-label") || "").trim();
+  }
+
+  function getAccessibleValueSignals(element, targetDocument = document) {
+    const values = new Set();
+    const ariaLabel = String(element.getAttribute("aria-label") || "").trim();
+    const labelledByText = String(element.getAttribute("aria-labelledby") || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => targetDocument.getElementById(id))
+      .filter(Boolean)
+      .map(getElementText)
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const accessibleLabel = ariaLabel || labelledByText;
+    const ariaValueText = String(element.getAttribute("aria-valuetext") || "").trim();
+    const ariaValueNow = String(element.getAttribute("aria-valuenow") || "").trim();
+    const dateTime = element.tagName && element.tagName.toLowerCase() === "time"
+      ? String(element.getAttribute("datetime") || "").trim()
+      : "";
+    const visibleText = getElementText(element);
+
+    if (accessibleLabel) values.add(accessibleLabel);
+    if (ariaValueText) values.add(`${accessibleLabel} ${ariaValueText}`.trim());
+    if (ariaValueNow) {
+      const suffix = /^\d{1,3}(?:\.\d+)?$/.test(ariaValueNow) ? "%" : "";
+      values.add(`${accessibleLabel} ${ariaValueNow}${suffix}`.trim());
+    }
+    if (dateTime) values.add(`${visibleText} ${dateTime}`.trim());
+
+    return {
+      values,
+      progressbar: element.getAttribute("role") === "progressbar",
+      ariaValue: Boolean(ariaValueText || ariaValueNow),
+      timeElement: Boolean(dateTime)
+    };
   }
 
   function isInsideConversation(element) {
@@ -120,7 +287,7 @@
   }
 
   function isLikelyUsageText(text) {
-    return ChatGPTUsageModel.matchesUsageTerms(text, ["usage", "remaining", "reset", "credits", "weekly", "hours5"])
+    return ChatGPTUsageModel.matchesUsageTerms(text, ["usage", "remaining", "reset", "credits", "weekly", "hours5", "bankedResets", "expiry"])
       || /(codex|gpt|thinking|plan|billing|plus|pro|team|enterprise)/i.test(text);
   }
 
@@ -251,8 +418,8 @@
     return ChatGPTUsageModel.parseCodexUsageText(text);
   }
 
-  function collectCodexAnalyticsDiagnostics(text, usage) {
-    const keys = ["codex5h", "codexWeekly", "codexSpark5h", "codexSparkWeekly", "codexCredits"];
+  function collectCodexAnalyticsDiagnostics(text, usage, analyticsDom) {
+    const keys = ["codex5h", "codexWeekly", "codexSpark5h", "codexSparkWeekly", "codexCredits", "bankedResets"];
     const foundKeys = keys.filter((key) => usage[key] && usage[key].value);
     return {
       pageDetected: true,
@@ -260,7 +427,17 @@
       textLength: text.length,
       hasResetText: ChatGPTUsageModel.matchesUsageTerms(text, ["reset"]),
       hasRemainingText: ChatGPTUsageModel.matchesUsageTerms(text, ["remaining"]),
-      hasCreditsText: ChatGPTUsageModel.matchesUsageTerms(text, ["credits"])
+      hasCreditsText: ChatGPTUsageModel.matchesUsageTerms(text, ["credits"]),
+      hasBankedResetsText: ChatGPTUsageModel.matchesUsageTerms(text, ["bankedResets"]),
+      hasExpiryText: ChatGPTUsageModel.matchesUsageTerms(text, ["expiry"]),
+      domSignals: analyticsDom ? {
+        relevantContainerCount: analyticsDom.relevantContainerCount,
+        progressbarCount: analyticsDom.progressbarCount,
+        ariaValueCount: analyticsDom.ariaValueCount,
+        timeElementCount: analyticsDom.timeElementCount,
+        mainTextLength: analyticsDom.mainTextLength,
+        readyState: analyticsDom.readyState
+      } : null
     };
   }
 
@@ -315,8 +492,12 @@
 
   function isCodexAnalyticsUsagePage() {
     return location.hostname === "chatgpt.com"
-      && location.pathname.toLowerCase().includes("/codex/")
-      && location.pathname.toLowerCase().includes("/settings/analytics");
+      && isCodexAnalyticsPath(location.pathname);
+  }
+
+  function isCodexAnalyticsPath(pathname) {
+    const path = String(pathname || "").toLowerCase();
+    return path.includes("/codex/") && path.includes("/settings/analytics");
   }
 
   function getElementText(element) {

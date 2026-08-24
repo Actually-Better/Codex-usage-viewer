@@ -5,6 +5,13 @@ const { test } = require("node:test");
 
 const { ChatGPTUsageModel } = require("../usage-model.js");
 
+test("formatRelativeTime presents friendly refresh ages", () => {
+  const now = Date.parse("2026-08-24T12:00:00.000Z");
+  assert.equal(ChatGPTUsageModel.formatRelativeTime("2026-08-24T11:59:40.000Z", now), "just now");
+  assert.equal(ChatGPTUsageModel.formatRelativeTime("2026-08-24T11:55:00.000Z", now), "5 min ago");
+  assert.equal(ChatGPTUsageModel.formatRelativeTime("2026-08-24T10:00:00.000Z", now), "2 h ago");
+});
+
 function readFixture(name) {
   return readFileSync(join(__dirname, "fixtures", name), "utf8");
 }
@@ -13,7 +20,7 @@ const CASES = [
   {
     name: "Spanish standard wording",
     fixture: "es-standard.txt",
-    expected: { codex5h: 72, codexWeekly: 18, codexSpark5h: 44, codexSparkWeekly: 8, credits: 123 }
+    expected: { codex5h: 72, codexWeekly: 18, codexSpark5h: 44, codexSparkWeekly: 8, credits: 123, bankedResets: 1 }
   },
   {
     name: "Spanish alternative wording",
@@ -23,7 +30,7 @@ const CASES = [
   {
     name: "English standard wording",
     fixture: "en-standard.txt",
-    expected: { codex5h: 64, codexWeekly: 12, codexSpark5h: 50, codexSparkWeekly: 7, credits: 91 }
+    expected: { codex5h: 64, codexWeekly: 12, codexSpark5h: 50, codexSparkWeekly: 7, credits: 91, bankedResets: 2 }
   },
   {
     name: "English alternative wording",
@@ -42,6 +49,12 @@ for (const { name, fixture, expected } of CASES) {
     assertPercentMetric(usage.codexSparkWeekly, expected.codexSparkWeekly);
     assert.equal(usage.codexCredits.structured.remainingCredits, expected.credits);
     assert.equal(usage.remainingCredits.structured.remainingCredits, expected.credits);
+    if (typeof expected.bankedResets === "number") {
+      assert.equal(usage.bankedResets.structured.bankedResetCount, expected.bankedResets);
+      assert.match(usage.bankedResets.structured.expiresText, /2026/);
+    } else {
+      assert.equal(usage.bankedResets.value, null);
+    }
     assert.match(usage.codex5h.structured.resetText, /\d{1,2}:\d{2}/);
     assert.match(usage.codexWeekly.structured.resetText, /\d{1,2}:\d{2}/);
   });
@@ -56,6 +69,8 @@ test("parseCodexUsageText handles compact visible text", () => {
   assert.equal(usage.codexSpark5h.structured.remainingPercent, 50);
   assert.equal(usage.codexSparkWeekly.structured.remainingPercent, 7);
   assert.equal(usage.codexCredits.structured.remainingCredits, 91);
+  assert.equal(usage.bankedResets.structured.bankedResetCount, 2);
+  assert.match(usage.bankedResets.structured.expiresText, /Jun 15, 2026/);
 });
 
 test("parseCodexUsageText exposes extraction confidence", () => {
@@ -69,6 +84,35 @@ test("parseCodexUsageText exposes extraction confidence", () => {
   assert.equal(variant.codexCredits.confidence, "low");
 });
 
+test("parseCodexUsageText counts a Spanish full-reset card without an explicit number", () => {
+  const usage = ChatGPTUsageModel.parseCodexUsageText(`
+    Restablecimientos de límites de uso
+    Usa un restablecimiento para recuperar tu límite de 5 horas, tu límite semanal o ambos.
+    Restablecimiento completo
+    Caduca el 21 de septiembre
+    Usar restablecimiento
+  `);
+
+  assert.equal(usage.bankedResets.structured.bankedResetCount, 1);
+  assert.equal(usage.bankedResets.structured.label, "Restablecimiento completo");
+  assert.equal(usage.bankedResets.structured.countSource, "visible-card-count");
+  assert.equal(usage.bankedResets.structured.expiresText, "21 de septiembre");
+  assert.equal(usage.bankedResets.confidence, "medium");
+});
+
+test("a full-reset expiry date is never mistaken for the banked count", () => {
+  const usage = ChatGPTUsageModel.parseCodexUsageText(`
+    Restablecimiento completo
+    Caduca el 21 de septiembre
+    21 de septiembre
+    21 de septiembre 2026-09-21
+  `);
+
+  assert.equal(usage.bankedResets.structured.bankedResetCount, 1);
+  assert.equal(usage.bankedResets.structured.countSource, "visible-card-count");
+  assert.equal(usage.bankedResets.structured.expiresText, "21 de septiembre");
+});
+
 test("TERMS groups English and Spanish extraction concepts", () => {
   assert.ok(ChatGPTUsageModel.TERMS.remaining.includes("remaining"));
   assert.ok(ChatGPTUsageModel.TERMS.remaining.includes("restante"));
@@ -76,6 +120,8 @@ test("TERMS groups English and Spanish extraction concepts", () => {
   assert.ok(ChatGPTUsageModel.TERMS.weekly.includes("semanal"));
   assert.ok(ChatGPTUsageModel.TERMS.hours5.includes("5 hours"));
   assert.ok(ChatGPTUsageModel.TERMS.hours5.includes("5 horas"));
+  assert.ok(ChatGPTUsageModel.TERMS.bankedResets.includes("banked resets"));
+  assert.ok(ChatGPTUsageModel.TERMS.bankedResets.includes("restablecimiento completo"));
 });
 
 test("getUsageLevel classifies thresholds", () => {

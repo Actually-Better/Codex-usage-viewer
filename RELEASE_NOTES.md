@@ -15,7 +15,7 @@
 - Reads visible Codex Analytics usage cards from `chatgpt.com`.
 - Shows visible 5-hour, weekly, Codex-Spark, and credit values.
 - Uses green, amber, and red usage indicators based on remaining percentage.
-- Opens the Codex usage page from the popup when automatic refresh cannot find values.
+- Refreshes through an automatically managed inactive Codex Analytics tab; users do not need to open Analytics manually.
 - Provides redacted diagnostics for bug reports.
 
 ### Privacy Guarantees

@@ -2,12 +2,16 @@ importScripts("usage-model.js");
 
 const { storageKeys, refreshAlarmName, refreshPeriodMinutes } = ChatGPTUsageConfig;
 const CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics";
+const ANALYTICS_LOAD_TIMEOUT_MS = 8000;
+const ANALYTICS_READ_ATTEMPTS = 25;
+const ANALYTICS_READ_INTERVAL_MS = 400;
+const ANALYTICS_STABLE_READS_REQUIRED = 5;
+const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
+const REFRESH_TIMEOUT_MS = 25000;
+let analyticsRefreshPromise = null;
 
 chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.alarms.create(refreshAlarmName, {
-    delayInMinutes: 1,
-    periodInMinutes: refreshPeriodMinutes
-  });
+  await ensureRefreshAlarm();
   const existing = await chrome.storage.local.get([storageKeys.counters]);
   await chrome.storage.local.set({
     [storageKeys.counters]: existing[storageKeys.counters]
@@ -16,9 +20,13 @@ chrome.runtime.onInstalled.addListener(async () => {
   });
 });
 
+chrome.runtime.onStartup.addListener(() => {
+  ensureRefreshAlarm().catch(() => {});
+});
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
-    refreshFromExistingChatGptTab("alarm");
+    refreshOnce("alarm").catch(() => {});
   }
 });
 
@@ -41,7 +49,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "usage:refresh") {
-    withTimeout(refreshForPopup(), 12000, "Refresh timed out.").then(sendResponse);
+    withTimeout(refreshForPopup(), REFRESH_TIMEOUT_MS, "Refresh timed out.").then(sendResponse);
     return true;
   }
 
@@ -64,6 +72,8 @@ async function saveSnapshot(snapshot, tab, source) {
   const existing = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
   const currentState = existing[storageKeys.state] || {};
   const counters = ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters]);
+  const hasVisibleUsage = ChatGPTUsageModel.hasVisibleUsage(snapshot);
+  const collectedAt = snapshot && snapshot.collectedAt ? snapshot.collectedAt : new Date().toISOString();
   const nextState = {
     ...currentState,
     snapshot: {
@@ -72,7 +82,9 @@ async function saveSnapshot(snapshot, tab, source) {
       source
     },
     counters,
-    lastRefreshAt: new Date().toISOString()
+    status: hasVisibleUsage ? "usage-current" : "page-snapshot",
+    dataCollectedAt: hasVisibleUsage ? collectedAt : currentState.dataCollectedAt,
+    lastRefreshAt: hasVisibleUsage ? collectedAt : currentState.lastRefreshAt
   };
   await chrome.storage.local.set({
     [storageKeys.state]: nextState,
@@ -84,6 +96,13 @@ async function saveSnapshot(snapshot, tab, source) {
 async function saveContentSnapshot(snapshot, tab) {
   if (snapshot && snapshot.codexAnalytics && !snapshot.domUsageVisible) {
     return { ok: true, ignored: true, reason: "Codex Analytics usage not visible yet." };
+  }
+  if (snapshot && !snapshot.codexAnalytics) {
+    const existing = await chrome.storage.local.get([storageKeys.state]);
+    const currentSnapshot = existing[storageKeys.state] && existing[storageKeys.state].snapshot;
+    if (ChatGPTUsageModel.hasVisibleUsage(currentSnapshot)) {
+      return { ok: true, ignored: true, reason: "Preserved the last valid Codex Analytics snapshot." };
+    }
   }
   return saveSnapshot(snapshot, tab, "content-script");
 }
@@ -104,87 +123,76 @@ async function getPopupState() {
 }
 
 async function refreshForPopup() {
-  return refreshFromCodexAnalyticsPage("popup");
+  return refreshOnce("popup");
 }
 
 async function openCodexAnalyticsPage() {
-  const tab = await chrome.tabs.create({
-    url: CODEX_ANALYTICS_URL,
-    active: true
-  });
-  return { ok: true, tabId: tab.id };
+  const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  const existing = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
+  if (existing) {
+    await chrome.tabs.update(existing.id, { active: true });
+    return { ok: true, tabId: existing.id, reused: true };
+  }
+  const tab = await chrome.tabs.create({ url: CODEX_ANALYTICS_URL, active: true });
+  return { ok: true, tabId: tab.id, reused: false };
 }
 
-async function refreshFromExistingChatGptTab(reason) {
+async function refreshOnce(reason) {
+  if (!analyticsRefreshPromise) {
+    analyticsRefreshPromise = refreshFromAnalyticsPage(reason)
+      .finally(() => {
+        analyticsRefreshPromise = null;
+      });
+  }
+  return analyticsRefreshPromise;
+}
+
+async function refreshFromAnalyticsPage(reason) {
   const tabs = await chrome.tabs.query({
     url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
   });
+  let analyticsTab = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
+  let temporaryTab = false;
+  let keepTemporaryTab = false;
 
-  if (!tabs.length) {
-    const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
-    const existingState = data[storageKeys.state] || {};
-    const state = {
-      ...existingState,
-      status: "no-chatgpt-tab",
-      counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-      lastRefreshAt: new Date().toISOString(),
-      reason
-    };
-    await chrome.storage.local.set({ [storageKeys.state]: state });
-    return { ok: true, state };
+  if (!analyticsTab && reason === "alarm") {
+    const data = await chrome.storage.local.get([storageKeys.state]);
+    return { ok: false, state: data[storageKeys.state] || {}, skipped: true };
   }
 
-  const codexAnalyticsTab = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
-  if (codexAnalyticsTab) return requestSnapshot(codexAnalyticsTab.id);
-
-  const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
-  const existingState = data[storageKeys.state] || {};
-  if (existingState.snapshot && ChatGPTUsageModel.hasVisibleUsage(existingState.snapshot)) {
-    const state = {
-      ...existingState,
-      status: "cached-visible-usage",
-      counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-      lastRefreshAt: new Date().toISOString(),
-      reason
-    };
-    await chrome.storage.local.set({ [storageKeys.state]: state });
-    return { ok: true, state };
-  }
-
-  return requestSnapshot(tabs[0].id);
-}
-
-async function refreshFromCodexAnalyticsPage(reason) {
-  let createdTab = null;
+  await markRefreshStarted(reason);
   try {
-    await markRefreshStarted(reason);
-    createdTab = await chrome.tabs.create({
-      url: `${CODEX_ANALYTICS_URL}?usageMonitorRefresh=${Date.now()}#usage`,
-      active: false
-    });
-    await waitForTabReadyOrDelay(createdTab.id);
-    const result = await requestSnapshotWithRetry(createdTab.id);
-    return {
-      ...result,
-      state: {
-        ...result.state,
-        reason
-      }
-    };
+    if (!analyticsTab) {
+      analyticsTab = await chrome.tabs.create({
+        url: CODEX_ANALYTICS_URL,
+        active: false
+      });
+      temporaryTab = true;
+    }
+
+    await waitForTabReadyOrDelay(analyticsTab.id);
+    const result = await requestSnapshotWithRetry(analyticsTab.id);
+    keepTemporaryTab = temporaryTab && result.pageLoginStatus === "logged-out";
+    if (keepTemporaryTab && chrome.tabs.update) {
+      await chrome.tabs.update(analyticsTab.id, { active: true }).catch(() => {});
+    }
+    return { ...result, state: { ...result.state, reason } };
   } catch (error) {
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
     const state = {
       ...(data[storageKeys.state] || {}),
-      status: "codex-analytics-load-failed",
+      status: analyticsTab ? "content-script-unavailable" : "codex-analytics-load-failed",
       counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-      lastRefreshAt: new Date().toISOString(),
-      diagnostic: "Could not load Codex Analytics with the existing browser session."
+      lastRefreshAttemptAt: new Date().toISOString(),
+      diagnostic: analyticsTab
+        ? "The Codex Analytics page did not respond to the extension after loading."
+        : "The extension could not create the temporary Codex Analytics tab."
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
-    if (createdTab && createdTab.id) {
-      chrome.tabs.remove(createdTab.id).catch(() => {});
+    if (temporaryTab && analyticsTab && !keepTemporaryTab) {
+      await chrome.tabs.remove(analyticsTab.id).catch(() => {});
     }
   }
 }
@@ -194,9 +202,8 @@ async function markRefreshStarted(reason) {
   const state = {
     ...(data[storageKeys.state] || {}),
     status: "refreshing-codex-analytics",
-    snapshot: null,
     counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-    lastRefreshAt: new Date().toISOString(),
+    lastRefreshAttemptAt: new Date().toISOString(),
     reason
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
@@ -204,47 +211,90 @@ async function markRefreshStarted(reason) {
 
 async function requestSnapshotWithRetry(tabId) {
   let lastError = null;
-  for (let attempt = 0; attempt < 16; attempt += 1) {
+  let lastSnapshot = null;
+  let accumulatedSnapshot = null;
+  let lastUsageSignature = null;
+  let stableUsageReads = 0;
+  let firstVisibleAttempt = null;
+
+  for (let attempt = 0; attempt < ANALYTICS_READ_ATTEMPTS; attempt += 1) {
     try {
-      await delay(600);
+      await delay(ANALYTICS_READ_INTERVAL_MS);
       const snapshot = await chrome.tabs.sendMessage(tabId, { type: "usage:collectSnapshot" });
       if (snapshot && snapshot.status === "ok") {
-        if (!snapshot.codexAnalytics || snapshot.domUsageVisible) {
-          return saveSnapshot(snapshot, { id: tabId }, "requested");
+        lastSnapshot = snapshot;
+        if (snapshot.codexAnalytics && ChatGPTUsageModel.hasVisibleUsage(snapshot)) {
+          accumulatedSnapshot = mergeUsageSnapshot(accumulatedSnapshot, snapshot);
+          const signature = JSON.stringify(accumulatedSnapshot.usage || {});
+          stableUsageReads = signature === lastUsageSignature ? stableUsageReads + 1 : 1;
+          lastUsageSignature = signature;
+          if (firstVisibleAttempt === null) firstVisibleAttempt = attempt;
+
+          const readsSinceFirstData = attempt - firstVisibleAttempt + 1;
+          if (stableUsageReads >= ANALYTICS_STABLE_READS_REQUIRED
+            && readsSinceFirstData >= ANALYTICS_MIN_READS_AFTER_FIRST_DATA) {
+            return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-stable");
+          }
         }
-        lastError = new Error("Codex Analytics loaded but usage cards are not visible yet.");
       }
     } catch (error) {
       lastError = error;
     }
   }
+  if (accumulatedSnapshot) return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-best-effort");
+  if (lastSnapshot) return saveIncompleteRefresh(lastSnapshot, tabId);
   throw lastError || new Error("Codex Analytics content script did not respond.");
 }
 
-async function requestSnapshot(tabId) {
-  try {
-    const snapshot = await chrome.tabs.sendMessage(tabId, { type: "usage:collectSnapshot" });
-    return saveSnapshot(snapshot, { id: tabId }, "requested");
-  } catch (error) {
-    const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
-    const state = {
-      ...(data[storageKeys.state] || {}),
-      status: "content-script-unavailable",
-      counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-      lastRefreshAt: new Date().toISOString(),
-      diagnostic: "Open or reload ChatGPT, then try again."
-    };
-    await chrome.storage.local.set({ [storageKeys.state]: state });
-    return { ok: false, state, error: String(error && error.message ? error.message : error) };
+function mergeUsageSnapshot(accumulated, incoming) {
+  const usage = { ...((accumulated && accumulated.usage) || {}) };
+  for (const [key, field] of Object.entries((incoming && incoming.usage) || {})) {
+    if (field && field.value) usage[key] = field;
+    else if (!(key in usage)) usage[key] = field;
   }
+  return {
+    ...(accumulated || {}),
+    ...incoming,
+    usage,
+    domUsageVisible: Object.values(usage).some((field) => field && field.value)
+  };
+}
+
+async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no-new-usage") {
+  const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+  const existingState = data[storageKeys.state] || {};
+  const existingSnapshot = existingState.snapshot;
+  const state = {
+    ...existingState,
+    snapshot: ChatGPTUsageModel.hasVisibleUsage(existingSnapshot)
+      ? existingSnapshot
+      : { ...pageSnapshot, tabId, source },
+    status: pageSnapshot.loginStatus === "logged-out" ? "sign-in-required" : "analytics-no-new-data",
+    counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
+    lastRefreshAttemptAt: new Date().toISOString(),
+    diagnostic: pageSnapshot.codexAnalytics
+      ? "Codex Analytics rendered, but no new visible usage values were detected yet."
+      : "The temporary tab responded, but the Codex Analytics route was not detected yet."
+  };
+  await chrome.storage.local.set({ [storageKeys.state]: state });
+  return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
 }
 
 async function waitForTabReadyOrDelay(tabId) {
   try {
-    await withTimeout(waitForTabComplete(tabId), 7000, "Timed out loading Codex Analytics.");
+    await withTimeout(waitForTabComplete(tabId), ANALYTICS_LOAD_TIMEOUT_MS, "Timed out loading Codex Analytics.");
   } catch {
-    await delay(1500);
+    await delay(1000);
   }
+}
+
+async function ensureRefreshAlarm() {
+  const existing = await chrome.alarms.get(refreshAlarmName);
+  if (existing) return;
+  await chrome.alarms.create(refreshAlarmName, {
+    delayInMinutes: 1,
+    periodInMinutes: refreshPeriodMinutes
+  });
 }
 
 function waitForTabComplete(tabId) {
@@ -252,7 +302,7 @@ function waitForTabComplete(tabId) {
     const timeoutId = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error("Timed out loading Codex Analytics."));
-    }, 7000);
+    }, ANALYTICS_LOAD_TIMEOUT_MS);
 
     function listener(updatedTabId, changeInfo) {
       if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
@@ -295,7 +345,7 @@ async function withTimeout(promise, ms, message) {
       ...(data[storageKeys.state] || {}),
       status: "refresh-timeout",
       counters: ChatGPTUsageModel.normalizeCounters(data[storageKeys.counters]),
-      lastRefreshAt: new Date().toISOString(),
+      lastRefreshAttemptAt: new Date().toISOString(),
       diagnostic: String(error && error.message ? error.message : error)
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });

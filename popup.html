@@ -46,10 +46,17 @@
         box-sizing: border-box;
       }
 
+      html {
+        width: 360px;
+        height: 600px;
+      }
+
       body {
-        width: min(360px, 100vw);
-        min-height: 480px;
+        width: 360px;
+        height: 600px;
         margin: 0;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
         background: var(--bg);
         color: var(--text);
         font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -93,6 +100,10 @@
       button:disabled {
         cursor: wait;
         opacity: 0.7;
+      }
+
+      #refreshButton {
+        min-width: 78px;
       }
 
       .actions {
@@ -298,10 +309,6 @@
       }
 
       @media (max-width: 330px) {
-        .actions {
-          grid-template-columns: 1fr;
-        }
-
         .row {
           grid-template-columns: 1fr;
           gap: 2px;
@@ -318,11 +325,12 @@
       <div class="status">
         <strong id="statusTitle">Loading local data...</strong>
         <span id="statusDetail">No external requests are used.</span>
+        <span id="statusAge">Last refresh: unavailable</span>
       </div>
 
       <div class="actions">
-        <button id="openUsageButton" class="primary" type="button">Open Codex Usage Page</button>
-        <button id="refreshButton" type="button">Refresh</button>
+        <button id="openUsageButton" type="button">Visit Analytics</button>
+        <button id="refreshButton" class="primary" type="button">Refresh</button>
       </div>
 
       <section>

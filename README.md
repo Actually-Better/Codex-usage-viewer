@@ -1,6 +1,6 @@
 # Codex Usage Viewer
 
-Local-only Chrome/Edge extension that shows visible ChatGPT/Codex usage information from the current browser session.
+Local-only Chrome/Edge extension that shows usage rendered by ChatGPT/Codex in the current browser session.
 
 It is intended for developers and power users who want a small usage popup while working with ChatGPT and Codex.
 
@@ -21,6 +21,7 @@ Recommended screenshots:
 - Reads visible Codex usage cards when available.
 - Shows 5-hour and weekly usage percentages when they are visible in the ChatGPT/Codex UI.
 - Shows remaining credits when visible.
+- Shows banked full-reset count and expiration when the Codex UI exposes `Banked resets`, `Full resets`, or `Restablecimiento completo`.
 - Highlights usage bars:
   - Green: more than 50% remaining.
   - Amber: 15% to 50% remaining.
@@ -39,7 +40,7 @@ Recommended screenshots:
 
 ## Limitations
 
-This extension reads visible UI text from `chatgpt.com` / `chat.openai.com`.
+This extension reads the rendered Codex Analytics UI from `chatgpt.com`.
 
 Some values may be unavailable depending on:
 
@@ -68,11 +69,17 @@ The extension may need parser updates when ChatGPT changes page structure, wordi
 
 ## How extraction works
 
-The extension reads visible UI text only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
+The extension reads rendered UI text and accessibility attributes only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
 
-Codex usage extraction is centralized in `usage-model.js`. The parser normalizes visible text, matches language-aware usage concepts, and returns structured metrics for 5-hour limits, weekly limits, credits, and reset text when those values are visible.
+For a manual refresh, the extension creates a normal but inactive Codex Analytics tab, waits for its UI to render completely, reads it with the same content extractor used on an already-open Analytics page, and closes only the tab it created. This is more reliable than embedding Analytics in a hidden frame and does not require the user to open or keep Analytics visible.
 
-The extraction terms currently cover English and Spanish. Instead of depending on exact labels, the parser matches concepts such as `5h`, `5-hour`, `5 hours`, `5 horas`, `weekly`, `week`, `semanal`, `remaining`, `left`, `restante`, `credits`, `credit balance`, and `creditos`.
+Codex usage extraction is centralized in `usage-model.js`. The parser normalizes visible text, matches language-aware usage concepts, and returns structured metrics for 5-hour limits, weekly limits, credits, banked full resets, expiration, and reset text when those values are visible.
+
+The extraction terms currently cover English and Spanish. Instead of depending on exact labels, the parser matches concepts such as `5h`, `5-hour`, `5 hours`, `5 horas`, `weekly`, `week`, `semanal`, `remaining`, `left`, `restante`, `credits`, `credit balance`, `creditos`, `banked resets`, `full resets`, and `restablecimiento completo`.
+
+Banked full resets are treated as a separate consumable resource used to reset counters. Their count and visible expiration text are not mixed with the normal reset time of a 5-hour or weekly usage window. When the UI omits a numeric count, each visible singular `Full reset` or `Restablecimiento completo` card counts as one.
+
+Analytics is read through two independent DOM channels: bounded usage-card text and a page-text fallback. The structured channel also reads accessible values such as `aria-valuenow`, `aria-valuetext`, progress bars, and `<time datetime>`. The parsed fields are merged without concatenating duplicate card text.
 
 Each detected metric includes extraction confidence:
 
@@ -94,18 +101,23 @@ When a value cannot be found from visible text, the extension leaves that metric
 
 ## Usage
 
-- Click **Refresh** to let the extension load the Codex usage page in the background and read visible usage values.
-- Click **Open Codex Usage Page** if automatic refresh cannot find usage values.
+- Click **Refresh** from any page. You do not need to open Analytics first.
+- Click **Visit Analytics** only when you want to inspect the source page yourself; it is optional for refresh.
+- A manual refresh creates a temporary inactive Analytics tab, reads it, and closes it automatically. If sign-in is required, the tab remains open and is activated so you can sign in through ChatGPT.
+- The 15-minute periodic check is opportunistic: it refreshes only when Analytics is already open and never creates a periodic tab.
+- A refresh samples Analytics every 400 ms for up to 10 seconds. It observes at least 13 reads after the first metric and requires five stable merged reads before accepting the snapshot. Metrics found in different reads are accumulated instead of replacing one another.
+- The main status shows a friendly age such as **Last refresh: 5 min ago**. Diagnostics retain the exact collection and attempt timestamps.
 - Open **Diagnostics** only when troubleshooting. It shows extractor version, page detection, visible fields, and local refresh timing.
 - Use **Copy diagnostics** when opening an issue. The copied payload is redacted and omits raw page text, full URLs, conversation content, and account identifiers.
 
 ## Troubleshooting
 
-- **Open ChatGPT to refresh**: open ChatGPT in a tab and sign in, then click **Refresh**.
-- **Sign in required**: sign in through ChatGPT. The extension never asks for credentials.
-- **Usage unavailable**: open the Codex usage page manually and confirm usage values are visible there.
+- **Sign in required**: the automatically created Analytics tab remains open so you can sign in through ChatGPT. The extension never asks for credentials.
+- **Usage unavailable**: open the Codex usage page manually only as a diagnostic check and confirm usage values are visible there.
+- **Usage page detected**: Analytics responded, but no new values were recognized during that attempt. This is not treated as a load failure; the popup updates automatically if the content script reports values afterward.
+- **Refresh failed**: Analytics loaded but did not respond to the extractor after all retries, or the temporary tab could not be created. Reload the unpacked extension and retry.
 - **Visible in browser but not in popup**: copy diagnostics and include the extension version, browser, language, and whether the Codex usage page opens manually.
-- **Stale values**: click **Open Codex Usage Page**, wait for it to load, then return to the popup and refresh.
+- **Stale values**: click **Refresh**. The popup distinguishes the successful data collection time from the latest refresh attempt.
 
 ## Project files
 
@@ -140,7 +152,7 @@ npm test
 ## Testing
 
 - `npm run check` runs `node --check` against the extension JavaScript files.
-- `npm test` runs parser tests for English, Spanish, and compact visible Codex Analytics text.
+- `npm test` runs English/Spanish parser tests and refresh-orchestration tests for caching, concurrency, and tab creation.
 - Manual release testing should load the unpacked extension in Chrome or Edge and verify signed-in, signed-out, unavailable-usage, and visible-usage states when possible.
 
 ## Contributing

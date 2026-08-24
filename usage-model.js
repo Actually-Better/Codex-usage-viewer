@@ -19,7 +19,8 @@
     "codexSpark5h",
     "codexSparkWeekly",
     "codexCredits",
-    "remainingCredits"
+    "remainingCredits",
+    "bankedResets"
   ];
   const TERMS = {
     usage: ["usage", "use", "uso"],
@@ -27,7 +28,9 @@
     reset: ["reset", "resets", "renew", "renews", "refresh", "refreshes", "reinicia", "reinicio", "renueva", "recarga"],
     credits: ["credit", "credits", "credit balance", "credito", "creditos", "saldo"],
     weekly: ["weekly", "week", "semanal", "semana"],
-    hours5: ["5h", "5 h", "5-hour", "5 hour", "5 hours", "five hour", "five-hour", "5 horas", "5 hora"]
+    hours5: ["5h", "5 h", "5-hour", "5 hour", "5 hours", "five hour", "five-hour", "5 horas", "5 hora"],
+    bankedResets: ["banked reset", "banked resets", "saved reset", "saved resets", "full reset", "full resets", "restablecimiento completo", "restablecimientos completos", "reinicio acumulado", "reinicios acumulados", "reinicio guardado", "reinicios guardados"],
+    expiry: ["expires", "expire", "expiration", "expiry", "valid until", "vence", "vencen", "vencimiento", "caduca", "caducan"]
   };
   const CONCEPT_PATTERNS = buildConceptPatterns(TERMS);
 
@@ -45,6 +48,20 @@
       hour: "2-digit",
       minute: "2-digit"
     });
+  }
+
+  function formatRelativeTime(value, now = Date.now()) {
+    const timestamp = parseTimestamp(value);
+    if (!timestamp) return "unavailable";
+    const elapsedMs = Math.max(0, now - timestamp);
+    const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
+    if (elapsedMinutes < 1) return "just now";
+    if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    if (elapsedHours < 24) return `${elapsedHours} h ago`;
+    const elapsedDays = Math.floor(elapsedHours / 24);
+    if (elapsedDays < 7) return `${elapsedDays} d ago`;
+    return formatTime(timestamp);
   }
 
   function defaultCounters(now = Date.now()) {
@@ -185,6 +202,18 @@
       fields.remainingCredits = field;
     }
 
+    const bankedResets = extractBankedResets(normalized);
+    if (bankedResets) {
+      fields.bankedResets = visibleField(formatBankedResetsValue(bankedResets), {
+        label: bankedResets.label,
+        bankedResetCount: bankedResets.count,
+        countSource: bankedResets.countSource,
+        expiresText: bankedResets.expiresText,
+        confidence: bankedResets.confidence,
+        expiryConfidence: bankedResets.expiresText ? bankedResets.expiryConfidence : null
+      }, bankedResets.confidence);
+    }
+
     return fields;
   }
 
@@ -203,7 +232,9 @@
 
     if (shouldPreferParsed) return parsed;
 
-    if (typeof structured.remainingPercent === "number" || typeof structured.remainingCredits === "number") {
+    if (typeof structured.remainingPercent === "number"
+      || typeof structured.remainingCredits === "number"
+      || typeof structured.bankedResetCount === "number") {
       return structured;
     }
 
@@ -346,6 +377,85 @@
     return null;
   }
 
+  function extractBankedResets(text) {
+    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    const visibleCardCount = countBankedResetCards(text);
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const currentNormalized = normalizeForMatch(lines[index]);
+      if (!hasConcept(currentNormalized, "bankedResets")) continue;
+
+      const labelTail = extractBankedResetLabelTail(lines[index]);
+      const countWindow = [labelTail, ...lines.slice(index + 1, Math.min(lines.length, index + 3))];
+      const explicitCount = extractBankedResetCount(countWindow);
+      const expiryWindow = [labelTail, ...lines.slice(index + 1, Math.min(lines.length, index + 6))];
+      const expiresText = extractExpiryText(expiryWindow);
+      const count = explicitCount === null && expiresText && visibleCardCount > 0
+        ? visibleCardCount
+        : explicitCount;
+
+      if (count === null && !expiresText) continue;
+      return {
+        label: /restablecimientos? completos?/i.test(lines[index])
+          ? "Restablecimiento completo"
+          : "Banked resets",
+        count,
+        countSource: explicitCount === null && count !== null ? "visible-card-count" : "explicit-number",
+        expiresText,
+        confidence: explicitCount !== null ? "high" : "medium",
+        expiryConfidence: expiresText ? "high" : null
+      };
+    }
+
+    return null;
+  }
+
+  function countBankedResetCards(text) {
+    const matches = normalizeVisibleText(text).match(/\bbanked reset\b(?!s)|\bfull reset\b(?!s)|\brestablecimiento completo\b/gi);
+    return matches ? matches.length : 0;
+  }
+
+  function extractBankedResetLabelTail(value) {
+    const match = String(value || "").match(/(?:banked resets?|saved resets?|full resets?|restablecimientos? completos?|reinicios? (?:acumulados?|guardados?))[\s\S]*$/i);
+    return match ? match[0] : String(value || "");
+  }
+
+  function extractBankedResetCount(lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const beforeExpiry = String(lines[index] || "").split(/\b(?:expires?|expiration|expiry|valid until|vence(?:n)?|vencimiento|caduca(?:n)?)\b/i)[0];
+      const match = index === 0
+        ? beforeExpiry.match(/\b(\d{1,3})\b/)
+        : beforeExpiry.match(/^\s*(?:count|cantidad|available|disponibles?)?\s*[:\-]?\s*(\d{1,3})\s*(?:available|disponibles?)?\s*$/i);
+      if (!match) continue;
+      const count = Number(match[1]);
+      if (Number.isFinite(count) && count >= 0) return count;
+    }
+    return null;
+  }
+
+  function extractExpiryText(lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const normalized = normalizeForMatch(line);
+      if (!hasConcept(normalized, "expiry")) continue;
+
+      const match = line.match(/(?:expires?|expiration|expiry|valid until|vence(?:n)?|vencimiento|caduca(?:n)?)(?:\s+(?:at|on|el|a las|en))?\s*[:\-]?\s*(.*)$/i);
+      const inlineValue = match && match[1] ? match[1].trim() : "";
+      const value = inlineValue || String(lines[index + 1] || "").trim();
+      return cleanExpiryText(value);
+    }
+    return null;
+  }
+
+  function cleanExpiryText(value) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .replace(/[;|].*$/, "")
+      .trim();
+    if (!text || hasConcept(normalizeForMatch(text), "bankedResets")) return null;
+    return text.slice(0, 100);
+  }
+
   function extractResetText(text) {
     const match = normalizeVisibleText(text).match(/(?:resets?|renews?|refresh(?:es)?|reset|reinicia|reinicio|renueva|recarga)(?:\s+(?:at|on|a las|el|en))?\s+(.{1,80})/i);
     if (!match) return null;
@@ -373,6 +483,12 @@
     return `${labelForMetricKey(key)}: ${percent}% remaining${reset}`;
   }
 
+  function formatBankedResetsValue({ count, expiresText }) {
+    const countText = count === null ? "count unavailable" : String(count);
+    const expiryText = expiresText ? `; expires ${expiresText}` : "";
+    return `Banked resets: ${countText}${expiryText}`;
+  }
+
   function labelForMetricKey(key) {
     const labels = {
       codex5h: "5h limit",
@@ -380,7 +496,8 @@
       codexSpark5h: "Codex-Spark 5h",
       codexSparkWeekly: "Codex-Spark weekly",
       codexCredits: "Credits",
-      remainingCredits: "Credits"
+      remainingCredits: "Credits",
+      bankedResets: "Banked resets"
     };
     return labels[key] || key;
   }
@@ -482,6 +599,7 @@
     TERMS,
     addLocalMessage,
     defaultCounters,
+    formatRelativeTime,
     formatTime,
     getUsageLevel,
     hasVisibleUsage,

@@ -6,15 +6,23 @@
   const copyDiagnosticsButton = document.getElementById("copyDiagnosticsButton");
   const statusTitle = document.getElementById("statusTitle");
   const statusDetail = document.getElementById("statusDetail");
+  const statusAge = document.getElementById("statusAge");
   const warningBox = document.getElementById("warningBox");
   let latestDiagnostics = null;
+  let latestRefreshTimestamp = null;
 
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
   copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
 
   renderLoading();
-  loadCachedState().then(() => refresh(false));
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    const stateChange = changes[ChatGPTUsageConfig.storageKeys.state];
+    if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
+  });
+  loadCachedState();
+  setInterval(updateRefreshAge, 30000);
 
   async function loadCachedState() {
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
@@ -26,15 +34,11 @@
     try {
       const response = await withTimeout(
         chrome.runtime.sendMessage({ type: "usage:refresh" }),
-        13000,
-        "Refresh timed out. Try again after opening ChatGPT once."
+        27000,
+        "Refresh timed out. Reload any open ChatGPT page and try again."
       );
       renderState(response && response.state);
-      if (!response || !response.ok) {
-        statusDetail.textContent = userRequested
-          ? "Open ChatGPT, sign in if needed, then refresh again."
-          : "Using cached local data.";
-      }
+      if ((!response || !response.ok) && !userRequested) statusDetail.textContent = "Using cached local data.";
     } catch (error) {
       statusTitle.textContent = "Usage unavailable";
       statusDetail.textContent = friendlyError(error);
@@ -47,10 +51,10 @@
     openUsageButton.disabled = true;
     try {
       await chrome.runtime.sendMessage({ type: "usage:openCodexAnalytics" });
-      statusTitle.textContent = "Open ChatGPT to refresh";
-      statusDetail.textContent = "The Codex usage page opened in a new tab. Return here and refresh after it loads.";
+      statusTitle.textContent = "Analytics opened";
+      statusDetail.textContent = "This visit is optional; Refresh can manage its own temporary tab.";
     } catch (error) {
-      statusTitle.textContent = "Usage unavailable";
+      statusTitle.textContent = "Could not open Analytics";
       statusDetail.textContent = friendlyError(error);
     } finally {
       openUsageButton.disabled = false;
@@ -69,31 +73,48 @@
     ]);
     renderCodexCards(null);
     renderRows("diagnosticsSection", [["Usage signals found", "Checking..."]]);
-    warningBox.textContent = "This extension reads visible page text with your existing browser session.";
+    warningBox.textContent = "This extension reads the rendered Codex Analytics UI with your existing browser session.";
   }
 
   function renderState(state) {
     const snapshot = state && state.snapshot;
     const counters = state && state.counters;
     const status = ChatGPTUsageModel.summarizeAvailability(snapshot || state);
-    const domUsageVisible = Boolean(snapshot && snapshot.domUsageVisible);
+    const hasVisibleUsage = ChatGPTUsageModel.hasVisibleUsage(snapshot);
+    const domUsageVisible = Boolean(snapshot && (snapshot.domUsageVisible || hasVisibleUsage));
     statusTitle.textContent = status;
+    latestRefreshTimestamp = state && (state.dataCollectedAt || state.lastRefreshAt);
+    updateRefreshAge();
 
-    if (!snapshot && state && state.status === "no-chatgpt-tab") {
-      statusTitle.textContent = "Open ChatGPT to refresh";
-      statusDetail.textContent = "Open ChatGPT and sign in. Then refresh this popup.";
+    if (state && state.status === "sign-in-required") {
+      statusTitle.textContent = "Sign in required";
+      statusDetail.textContent = "The Analytics tab was left open so you can sign in through ChatGPT, then refresh again.";
     } else if (snapshot && snapshot.loginStatus === "logged-out") {
       statusTitle.textContent = "Sign in required";
       statusDetail.textContent = "Sign in using ChatGPT. This extension never asks for passwords.";
+    } else if (state && state.status === "refreshing-codex-analytics") {
+      statusTitle.textContent = "Refreshing usage";
+      statusDetail.textContent = hasVisibleUsage
+        ? "Checking for newer values; the last collected usage remains visible."
+        : "Opening a temporary background Analytics tab and waiting for all usage cards.";
+    } else if (state && state.status === "analytics-no-new-data") {
+      statusTitle.textContent = hasVisibleUsage ? "Showing cached usage" : "Analytics loaded";
+      statusDetail.textContent = hasVisibleUsage
+        ? "Analytics loaded, but no newer usage values were detected yet."
+        : "Analytics loaded, but its usage values were not detected yet.";
     } else if (state && state.status === "cached-visible-usage") {
       statusTitle.textContent = "Usage visible";
       statusDetail.textContent = "Showing the last visible Codex usage found.";
-    } else if (state && state.status === "codex-analytics-load-failed") {
-      statusTitle.textContent = "Usage unavailable";
-      statusDetail.textContent = "Open the Codex usage page, sign in if needed, then refresh.";
+    } else if (state && (state.status === "content-script-unavailable" || state.status === "codex-analytics-load-failed")) {
+      statusTitle.textContent = hasVisibleUsage ? "Showing cached usage" : "Refresh failed";
+      statusDetail.textContent = hasVisibleUsage
+        ? "The Analytics reader failed. Showing the last collected usage values."
+        : "Reload the extension and try again; the failure was confirmed after Analytics loaded.";
     } else if (state && state.status === "refresh-timeout") {
-      statusTitle.textContent = "Usage unavailable";
-      statusDetail.textContent = "Refresh took too long. Open the usage page once, then try again.";
+      statusTitle.textContent = hasVisibleUsage ? "Showing cached usage" : "Refresh timed out";
+      statusDetail.textContent = hasVisibleUsage
+        ? "The latest refresh timed out. Showing the last collected usage values."
+        : "Refresh took too long. Try again; Analytics may still be loading.";
     } else if (!domUsageVisible) {
       statusTitle.textContent = "Usage unavailable";
       statusDetail.textContent = "ChatGPT did not show usage values on the loaded page.";
@@ -111,10 +132,11 @@
 
     renderRows("diagnosticsSection", [
       ["Extractor version", snapshot && snapshot.extractorVersion ? escapeHtml(snapshot.extractorVersion) : "Unavailable"],
-      ["Page detected", snapshot ? `${escapeHtml(snapshot.hostname)} (${escapeHtml(snapshot.pathCategory || snapshot.pageKind || "chat")})` : "No ChatGPT tab detected"],
+      ["Page detected", snapshot ? `${escapeHtml(snapshot.hostname)} (${escapeHtml(snapshot.pathCategory || snapshot.pageKind || "chat")})` : "No Analytics snapshot"],
       ["Usage signals found", renderUsageSignals(snapshot)],
       ["Visible fields found", renderVisibleFields(snapshot)],
-      ["Last refresh", state && state.lastRefreshAt ? ChatGPTUsageModel.formatTime(state.lastRefreshAt) : "Unavailable"],
+      ["Data collected", state && (state.dataCollectedAt || state.lastRefreshAt) ? ChatGPTUsageModel.formatTime(state.dataCollectedAt || state.lastRefreshAt) : "Unavailable"],
+      ["Last refresh attempt", state && state.lastRefreshAttemptAt ? ChatGPTUsageModel.formatTime(state.lastRefreshAttemptAt) : "Unavailable"],
       ["Local tracking", counters && counters.localTrackingActive ? badge("Active", "ok") : badge("Inactive", "warn")],
       ["Last detected send", counters && counters.last_message_timestamp ? ChatGPTUsageModel.formatTime(counters.last_message_timestamp) : "None"],
       ["Storage", "chrome.storage.local only"],
@@ -123,6 +145,10 @@
 
     warningBox.textContent = collectWarnings(snapshot, counters, state).slice(0, 5).join(" ");
     latestDiagnostics = buildDiagnosticsPayload(state);
+  }
+
+  function updateRefreshAge() {
+    statusAge.textContent = `Last refresh: ${ChatGPTUsageModel.formatRelativeTime(latestRefreshTimestamp)}`;
   }
 
   function renderLogin(snapshot) {
@@ -147,7 +173,8 @@
       ["codexWeekly", "Weekly limit"],
       ["codexSpark5h", "GPT-5.3-Codex-Spark 5h"],
       ["codexSparkWeekly", "GPT-5.3-Codex-Spark weekly"],
-      ["codexCredits", "Credits"]
+      ["codexCredits", "Credits"],
+      ["bankedResets", "Full resets banked"]
     ];
 
     for (const [key, fallbackTitle] of items) {
@@ -178,6 +205,8 @@
       value.textContent = `${structured.remainingPercent}%`;
     } else if (typeof structured.remainingCredits === "number") {
       value.textContent = String(structured.remainingCredits);
+    } else if (typeof structured.bankedResetCount === "number") {
+      value.textContent = String(structured.bankedResetCount);
     } else {
       value.textContent = "Visible";
     }
@@ -203,6 +232,13 @@
       reset.className = "metric-reset";
       reset.textContent = `Reset: ${structured.resetText}`;
       card.append(reset);
+    }
+
+    if (structured.expiresText) {
+      const expiry = document.createElement("div");
+      expiry.className = "metric-reset";
+      expiry.textContent = `Expires: ${structured.expiresText}`;
+      card.append(expiry);
     }
 
     return card;
@@ -235,7 +271,8 @@
       codexWeekly: "weekly",
       codexSpark5h: "spark 5h",
       codexSparkWeekly: "spark weekly",
-      codexCredits: "credits"
+      codexCredits: "credits",
+      bankedResets: "full resets banked"
     };
     const found = Object.entries(labels)
       .filter(([key]) => snapshot.usage[key] && snapshot.usage[key].value)
@@ -288,10 +325,21 @@
         foundKeys: snapshot.codexAnalytics.foundKeys || [],
         hasResetText: Boolean(snapshot.codexAnalytics.hasResetText),
         hasRemainingText: Boolean(snapshot.codexAnalytics.hasRemainingText),
-        hasCreditsText: Boolean(snapshot.codexAnalytics.hasCreditsText)
+        hasCreditsText: Boolean(snapshot.codexAnalytics.hasCreditsText),
+        hasBankedResetsText: Boolean(snapshot.codexAnalytics.hasBankedResetsText),
+        hasExpiryText: Boolean(snapshot.codexAnalytics.hasExpiryText),
+        domSignals: snapshot.codexAnalytics.domSignals ? {
+          relevantContainerCount: snapshot.codexAnalytics.domSignals.relevantContainerCount || 0,
+          progressbarCount: snapshot.codexAnalytics.domSignals.progressbarCount || 0,
+          ariaValueCount: snapshot.codexAnalytics.domSignals.ariaValueCount || 0,
+          timeElementCount: snapshot.codexAnalytics.domSignals.timeElementCount || 0,
+          mainTextLength: snapshot.codexAnalytics.domSignals.mainTextLength || 0,
+          readyState: snapshot.codexAnalytics.domSignals.readyState || null
+        } : null
       } : null,
       localTrackingActive: Boolean(counters && counters.localTrackingActive),
-      lastRefreshAt: state && state.lastRefreshAt ? state.lastRefreshAt : null,
+      dataCollectedAt: state && (state.dataCollectedAt || state.lastRefreshAt) ? state.dataCollectedAt || state.lastRefreshAt : null,
+      lastRefreshAttemptAt: state && state.lastRefreshAttemptAt ? state.lastRefreshAttemptAt : null,
       collectedAt: snapshot && snapshot.collectedAt ? snapshot.collectedAt : null,
       storage: "chrome.storage.local only",
       network: "no third-party requests"
@@ -323,16 +371,19 @@
 
   function collectWarnings(snapshot, counters, state) {
     const warnings = [];
-    if (!snapshot && state && state.status === "no-chatgpt-tab") {
-      warnings.push("ChatGPT is not open; open ChatGPT in a tab and sign in.");
-    }
     if (state && state.status === "content-script-unavailable") {
-      warnings.push("Content script is unavailable; reload the ChatGPT tab.");
+      warnings.push("Analytics loaded but its content script did not respond after all retries.");
+    }
+    if (state && state.status === "analytics-no-new-data") {
+      warnings.push("Analytics responded successfully, but no new usage values were detected during this attempt.");
+    }
+    if (state && state.status === "sign-in-required") {
+      warnings.push("The temporary Analytics tab remains open only so you can sign in safely through ChatGPT.");
     }
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");
     }
-    warnings.push("Visible usage is read from the Codex Analytics page loaded with your existing browser session.");
+    warnings.push("Usage is read from the rendered Codex Analytics UI in a temporary inactive tab.");
     return warnings;
   }
 
@@ -378,7 +429,7 @@
 
   function friendlyError(error) {
     const message = String(error && error.message ? error.message : error);
-    if (/timed out/i.test(message)) return "Refresh took too long. Open ChatGPT and try again.";
-    return "Open ChatGPT, sign in if needed, then try again.";
+    if (/timed out/i.test(message)) return "Refresh took too long. Try again; Analytics may still be loading.";
+    return "Analytics could not be read. Reload the extension and try again.";
   }
 })();
