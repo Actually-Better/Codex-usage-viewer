@@ -5,7 +5,6 @@
     storageKeys: {
       state: "chatgptUsageMonitor.state",
       counters: "chatgptUsageMonitor.counters",
-      compactMode: "chatgptUsageMonitor.compactMode",
       retainedSignInTab: "chatgptUsageMonitor.retainedSignInTab"
     },
     refreshAlarmName: "chatgpt-usage-monitor-refresh",

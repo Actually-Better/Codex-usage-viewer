@@ -8,15 +8,16 @@
       :root {
         color-scheme: light dark;
         --bg: #f7f8fa;
-        --panel: #ffffff;
+        --surface: #ffffff;
+        --surface-emphasis: #eef2f6;
         --text: #111827;
-        --muted: #5b6472;
+        --muted: #667085;
         --border: #d9dee7;
-        --button-bg: #111827;
-        --button-text: #ffffff;
+        --accent: #0f766e;
+        --accent-strong: #14b8a6;
+        --accent-text: #ffffff;
         --warning: #8a5a00;
         --warning-bg: #fff6d8;
-        --ok: #0f766e;
         --bad: #b42318;
         --red: #dc2626;
         --amber: #f59e0b;
@@ -25,16 +26,17 @@
 
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #111318;
-          --panel: #181b22;
+          --bg: #101318;
+          --surface: #151920;
+          --surface-emphasis: #151b24;
           --text: #f4f6fa;
           --muted: #aab2c0;
           --border: #2b303b;
-          --button-bg: #f4f6fa;
-          --button-text: #111318;
+          --accent: #5eead4;
+          --accent-strong: #2dd4bf;
+          --accent-text: #071614;
           --warning: #ffd166;
           --warning-bg: #2b2413;
-          --ok: #5eead4;
           --bad: #fca5a5;
           --red: #f87171;
           --amber: #fbbf24;
@@ -46,14 +48,13 @@
         box-sizing: border-box;
       }
 
-      html {
+      html,
+      body {
         width: 360px;
         height: 600px;
       }
 
       body {
-        width: 360px;
-        height: 600px;
         margin: 0;
         overflow-y: auto;
         scrollbar-gutter: stable;
@@ -63,187 +64,158 @@
       }
 
       .shell {
-        padding: 12px;
+        min-height: 100%;
+        padding: 11px 16px 9px;
       }
 
       header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
       }
 
       h1 {
         margin: 0;
-        font-size: 15px;
+        font-size: 16px;
         line-height: 1.2;
-      }
-
-      .compact-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--muted);
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 600;
-        user-select: none;
-      }
-
-      .compact-toggle input {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        opacity: 0;
-      }
-
-      .toggle-track {
-        position: relative;
-        width: 32px;
-        height: 18px;
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        background: var(--border);
-        transition: background 120ms ease, border-color 120ms ease;
-      }
-
-      .toggle-track::after {
-        content: "";
-        position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: var(--panel);
-        box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
-        transition: transform 120ms ease;
-      }
-
-      .compact-toggle input:checked + .toggle-track {
-        border-color: var(--ok);
-        background: var(--ok);
-      }
-
-      .compact-toggle input:checked + .toggle-track::after {
-        transform: translateX(14px);
-      }
-
-      .compact-toggle input:focus-visible + .toggle-track {
-        outline: 2px solid var(--ok);
-        outline-offset: 2px;
-      }
-
-      button {
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--panel);
-        color: var(--text);
-        cursor: pointer;
-        font: inherit;
-        min-height: 30px;
-        padding: 4px 9px;
       }
 
       button:focus-visible,
       summary:focus-visible {
-        outline: 2px solid var(--ok);
+        outline: 2px solid var(--accent);
         outline-offset: 2px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        min-height: 32px;
+        padding: 5px 9px;
       }
 
       button:disabled {
         cursor: wait;
-        opacity: 0.7;
-      }
-
-      #refreshButton {
-        min-width: 78px;
-      }
-
-      .actions {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-
-      .primary {
-        background: var(--button-bg);
-        border-color: var(--button-bg);
-        color: var(--button-text);
-        font-weight: 650;
+        opacity: 0.65;
       }
 
       .status {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--panel);
-        padding: 9px 10px;
-        margin-bottom: 10px;
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1fr);
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 11px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent-strong);
+      }
+
+      .status-copy {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
       }
 
       .status strong {
-        display: block;
         font-size: 13px;
+        white-space: nowrap;
       }
 
-      .status span {
+      #statusDetail {
+        min-width: 0;
         color: var(--muted);
-        display: block;
-        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #statusDetail:empty {
+        display: none;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 5px;
+        padding-bottom: 13px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      #openUsageButton {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        padding-left: 0;
+        padding-right: 4px;
+        white-space: nowrap;
+      }
+
+      .refresh-cluster {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        min-width: 0;
+        gap: 5px;
+      }
+
+      #statusAge {
+        color: var(--muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      #refreshButton {
+        min-width: 62px;
+        background: var(--accent-strong);
+        color: var(--accent-text);
+        font-size: 11px;
+        font-weight: 700;
       }
 
       section {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--panel);
-        margin-bottom: 10px;
-        overflow: hidden;
-      }
-
-      details {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--panel);
-        margin-bottom: 10px;
-        overflow: hidden;
-      }
-
-      summary {
-        color: var(--muted);
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 700;
-        list-style-position: inside;
-        padding: 8px 10px;
-        text-transform: uppercase;
+        margin: 0;
       }
 
       h2 {
         margin: 0;
-        padding: 8px 10px;
-        border-bottom: 1px solid var(--border);
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0;
-        color: var(--muted);
+        padding: 12px 0 9px;
+        color: var(--text);
+        font-size: 15px;
+        line-height: 1.25;
       }
 
       dl {
         margin: 0;
       }
 
-      .row {
+      #chatgptSection {
         display: grid;
-        grid-template-columns: 118px 1fr;
-        gap: 8px;
-        padding: 8px 10px;
-        border-top: 1px solid var(--border);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 12px 0 11px;
+        border-bottom: 1px solid var(--border);
       }
 
-      .row:first-child {
-        border-top: 0;
+      #chatgptSection .row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+        padding-right: 10px;
+        font-size: 12px;
+      }
+
+      #chatgptSection .row + .row {
+        border-left: 1px solid var(--border);
+        padding-right: 0;
+        padding-left: 10px;
       }
 
       dt {
@@ -251,21 +223,19 @@
       }
 
       dd {
-        margin: 0;
         min-width: 0;
+        margin: 0;
         overflow-wrap: anywhere;
       }
 
       .badge {
-        display: inline-block;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        padding: 1px 7px;
-        font-size: 12px;
+        display: inline;
+        font-size: inherit;
+        white-space: nowrap;
       }
 
       .ok {
-        color: var(--ok);
+        color: var(--accent);
       }
 
       .bad {
@@ -276,200 +246,236 @@
         color: var(--warning);
       }
 
-      .note {
-        background: var(--warning-bg);
-        color: var(--warning);
-        border-radius: 6px;
-        padding: 7px 8px;
-        margin: 8px 10px 10px;
+      .usage-section > h2 {
+        padding-bottom: 12px;
       }
 
-      .diagnostics-actions {
-        border-top: 1px solid var(--border);
-        padding: 8px 10px 0;
-      }
-
-      .metric-list {
+      .primary-limits {
         display: grid;
-        gap: 0;
+        grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
+        align-items: stretch;
+        gap: 18px;
+        margin: 0 -16px;
+        padding: 11px 16px 12px;
+        background: var(--surface-emphasis);
       }
 
       .metric-card {
-        padding: 11px 10px 10px;
-        border-top: 1px solid var(--border);
-      }
-
-      .metric-card:first-child {
-        border-top: 0;
-      }
-
-      .metric-head {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: start;
-        gap: 10px;
+        min-width: 0;
       }
 
       .metric-title {
-        color: var(--muted);
-        font-weight: 600;
+        min-height: 30px;
+        color: var(--text);
+        font-weight: 650;
         line-height: 1.25;
         overflow-wrap: anywhere;
       }
 
+      .metric-body {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 44px;
+      }
+
       .metric-value {
-        font-size: 19px;
-        font-weight: 700;
-        line-height: 1.1;
+        font-size: 20px;
+        font-weight: 750;
+        line-height: 1;
         white-space: nowrap;
-        text-align: right;
       }
 
-      .progress {
-        width: 100%;
-        height: 8px;
-        margin-top: 9px;
-        border-radius: 999px;
-        background: var(--border);
-        overflow: hidden;
-      }
-      .progress-fill {
-        height: 100%;
-        border-radius: inherit;
-      }
-
-      .progress-fill.green {
-        background: var(--green);
-      }
-
-      .progress-fill.amber {
-        background: var(--amber);
-      }
-
-      .progress-fill.red {
-        background: var(--red);
+      .metric-meta {
+        min-width: 0;
       }
 
       .metric-reset {
         color: var(--muted);
-        font-size: 12px;
-        margin-top: 7px;
-        text-align: right;
-      }
-
-      body.compact .metric-list {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      body.compact #chatgptSection {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      body.compact #chatgptSection .row {
-        grid-template-columns: 1fr;
-        gap: 3px;
-        min-width: 0;
-        border-top: 0;
-        padding: 8px;
-      }
-
-      body.compact #chatgptSection .row + .row {
-        border-left: 1px solid var(--border);
-      }
-
-      body.compact .metric-card {
-        min-width: 0;
-        padding: 9px 8px 8px;
-      }
-
-      body.compact .metric-card:nth-child(-n + 2) {
-        border-top: 0;
-      }
-
-      body.compact .metric-card:nth-child(odd) {
-        border-right: 1px solid var(--border);
-      }
-
-      body.compact .metric-head {
-        gap: 6px;
-      }
-
-      body.compact .metric-title {
         font-size: 11px;
+        overflow-wrap: anywhere;
       }
 
-      body.compact .metric-value {
-        font-size: 17px;
-      }
-
-      body.compact .percentage-metric .metric-head {
-        align-items: center;
-      }
-
-      body.compact .percentage-metric .metric-value {
+      .percentage-metric .metric-value {
         position: relative;
         display: grid;
-        width: 42px;
-        height: 42px;
-        place-items: center;
+        width: 48px;
+        height: 48px;
         flex: 0 0 auto;
+        place-items: center;
         border-radius: 50%;
         background: conic-gradient(
           from -90deg,
           var(--metric-color) var(--metric-percent),
           var(--border) 0
         );
-        font-size: 11px;
+        font-size: 12px;
         text-align: center;
       }
 
-      body.compact .percentage-metric .metric-value::before {
+      .percentage-metric .metric-value::before {
         content: "";
         position: absolute;
-        inset: 4px;
+        inset: 5px;
         border-radius: 50%;
-        background: var(--panel);
+        background: var(--surface-emphasis);
       }
 
-      body.compact .percentage-metric .metric-value-text {
+      .percentage-metric .metric-value-text {
         position: relative;
         z-index: 1;
       }
 
-      body.compact .percentage-metric.usage-green {
+      .percentage-metric.usage-green {
         --metric-color: var(--green);
       }
 
-      body.compact .percentage-metric.usage-amber {
+      .percentage-metric.usage-amber {
         --metric-color: var(--amber);
       }
 
-      body.compact .percentage-metric.usage-red {
+      .percentage-metric.usage-red {
         --metric-color: var(--red);
       }
 
-      body.compact .percentage-metric .progress {
+      .inline-disclosure,
+      .diagnostics {
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        background: transparent;
+      }
+
+      .inline-disclosure > summary,
+      .diagnostics > summary {
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 650;
+        list-style-position: inside;
+        padding: 12px 0;
+      }
+
+      .other-limits-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 14px;
+        gap: 0;
+        padding-bottom: 7px;
+      }
+
+      .other-limits-list .metric-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 10px;
+        padding: 8px 0;
+        border-top: 1px solid var(--border);
+      }
+
+      .other-limits-list .metric-title {
+        min-height: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .other-limits-list .metric-body {
+        min-height: 0;
+      }
+
+      .other-limits-list .metric-value {
+        font-size: 14px;
+      }
+
+      .other-limits-list .metric-meta {
         display: none;
       }
 
-      body.compact .metric-reset {
-        font-size: 11px;
+      .totals-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding: 13px 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .totals-list .metric-card {
+        padding-right: 12px;
+      }
+
+      .totals-list .metric-card + .metric-card {
+        border-left: 1px solid var(--border);
+        padding-right: 0;
+        padding-left: 12px;
+      }
+
+      .totals-list .metric-title {
+        min-height: 0;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .totals-list .metric-body {
+        display: block;
+        min-height: 0;
         margin-top: 5px;
-        text-align: left;
-        overflow-wrap: anywhere;
+      }
+
+      .totals-list .metric-value {
+        font-size: 22px;
+      }
+
+      .totals-list .metric-reset {
+        margin-top: 5px;
+      }
+
+      .diagnostics .row {
+        display: grid;
+        grid-template-columns: 118px 1fr;
+        gap: 8px;
+        padding: 7px 0;
+        border-top: 1px solid var(--border);
+      }
+
+      .diagnostics-actions {
+        border-top: 1px solid var(--border);
+        padding-top: 8px;
+      }
+
+      .diagnostics-actions button {
+        border: 1px solid var(--border);
+      }
+
+      .note {
+        margin: 8px 0 10px;
+        border-radius: 6px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        padding: 7px 8px;
       }
 
       .foot {
         color: var(--muted);
         font-size: 12px;
-        margin-top: 8px;
+        padding-top: 11px;
       }
 
       @media (max-width: 330px) {
-        .row {
+        .status {
+          grid-template-columns: 8px minmax(0, 1fr);
+        }
+
+        #statusDetail {
+          display: none;
+        }
+
+        #chatgptSection {
           grid-template-columns: 1fr;
-          gap: 2px;
+          gap: 8px;
+        }
+
+        #chatgptSection .row + .row {
+          border-left: 0;
+          padding-left: 0;
         }
       }
     </style>
@@ -478,35 +484,41 @@
     <div class="shell">
       <header>
         <h1>Codex Usage Viewer</h1>
-        <label class="compact-toggle" for="compactModeToggle">
-          <span>Compact</span>
-          <input id="compactModeToggle" type="checkbox" role="switch">
-          <span class="toggle-track" aria-hidden="true"></span>
-        </label>
       </header>
 
-      <div class="status">
-        <strong id="statusTitle">Loading local data...</strong>
-        <span id="statusDetail">No external requests are used.</span>
-        <span id="statusAge">Last refresh: unavailable</span>
+      <div class="status" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div class="status-copy">
+          <strong id="statusTitle">Loading local data...</strong>
+          <span id="statusDetail">No external requests are used.</span>
+        </div>
       </div>
 
       <div class="actions">
         <button id="openUsageButton" type="button">Visit Analytics</button>
-        <button id="refreshButton" class="primary" type="button">Refresh</button>
+        <div class="refresh-cluster">
+          <span id="statusAge">Last refresh: unavailable</span>
+          <button id="refreshButton" type="button">Refresh</button>
+        </div>
       </div>
 
-      <section>
-        <h2>ChatGPT</h2>
+      <section class="account-section">
         <dl id="chatgptSection"></dl>
       </section>
 
-      <section>
+      <section class="usage-section">
         <h2>Codex / Credits</h2>
-        <div id="codexSection" class="metric-list"></div>
+        <div id="codexSection">
+          <div id="primaryLimits" class="primary-limits"></div>
+          <details id="otherLimits" class="inline-disclosure">
+            <summary>Other limits</summary>
+            <div id="otherLimitsSection" class="other-limits-list"></div>
+          </details>
+          <div id="totalsSection" class="totals-list"></div>
+        </div>
       </section>
 
-      <details>
+      <details class="diagnostics">
         <summary>Diagnostics</summary>
         <dl id="diagnosticsSection"></dl>
         <div class="diagnostics-actions">

@@ -5,11 +5,7 @@ const { test } = require("node:test");
 
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 
-test("configuration provides a persistent compact-mode preference key", () => {
-  assert.equal(
-    ChatGPTUsageConfig.storageKeys.compactMode,
-    "chatgptUsageMonitor.compactMode"
-  );
+test("configuration provides the retained sign-in tab key", () => {
   assert.equal(
     ChatGPTUsageConfig.storageKeys.retainedSignInTab,
     "chatgptUsageMonitor.retainedSignInTab"

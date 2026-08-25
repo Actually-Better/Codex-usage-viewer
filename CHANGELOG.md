@@ -9,8 +9,8 @@ All notable user-facing changes are documented here.
 - Reuse Analytics only when it is already the active page; from every other page, open a new inactive temporary page even if Analytics exists in the background.
 - Give 15-minute refreshes the same background-tab fallback when Analytics is closed, fails, or returns no metrics; recreate the periodic alarm whenever the background worker starts if it is missing.
 - Close scheduled sign-in tabs, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
-- Add a persistent **Compact** toggle with paired rows for login/plan, 5-hour/weekly limits, Spark limits, and credits/banked full resets.
-- Replace compact-mode percentage bars with small color-coded circular gauges while preserving horizontal bars in the normal layout.
+- Make the compact paired layout the only popup layout, with login/plan, 5-hour/weekly limits, Spark limits, and credits/banked full resets.
+- Use small color-coded circular gauges for percentage metrics.
 - Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.
 - Release retained-tab ownership when the user activates Analytics or opens it through **Visit Analytics**, and replace stale retained tabs when a popup joins an alarm refresh.
 - Recheck a temporary tab immediately before cleanup, preserve it if the user activated it, and keep inactive page-driven redirects under extension ownership.

@@ -4,7 +4,6 @@
   const refreshButton = document.getElementById("refreshButton");
   const openUsageButton = document.getElementById("openUsageButton");
   const copyDiagnosticsButton = document.getElementById("copyDiagnosticsButton");
-  const compactModeToggle = document.getElementById("compactModeToggle");
   const statusTitle = document.getElementById("statusTitle");
   const statusDetail = document.getElementById("statusDetail");
   const statusAge = document.getElementById("statusAge");
@@ -15,41 +14,18 @@
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
   copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
-  compactModeToggle.addEventListener("change", saveCompactMode);
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const stateChange = changes[ChatGPTUsageConfig.storageKeys.state];
     if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
-    const compactModeChange = changes[ChatGPTUsageConfig.storageKeys.compactMode];
-    if (compactModeChange) applyCompactMode(Boolean(compactModeChange.newValue));
   });
   initializePopup();
   setInterval(updateRefreshAge, 30000);
 
   async function initializePopup() {
-    const compactModeKey = ChatGPTUsageConfig.storageKeys.compactMode;
-    try {
-      const preferences = await chrome.storage.local.get([compactModeKey]);
-      applyCompactMode(Boolean(preferences[compactModeKey]));
-    } catch {
-      applyCompactMode(false);
-    }
     renderLoading();
     await loadCachedState();
-  }
-
-  function applyCompactMode(enabled) {
-    document.body.classList.toggle("compact", enabled);
-    compactModeToggle.checked = enabled;
-  }
-
-  async function saveCompactMode() {
-    const enabled = compactModeToggle.checked;
-    applyCompactMode(enabled);
-    await chrome.storage.local.set({
-      [ChatGPTUsageConfig.storageKeys.compactMode]: enabled
-    });
   }
 
   async function loadCachedState() {
@@ -150,8 +126,8 @@
       statusTitle.textContent = "Usage unavailable";
       statusDetail.textContent = "ChatGPT did not show usage values on the loaded page.";
     } else {
-      statusTitle.textContent = "Usage visible";
-      statusDetail.textContent = "Showing usage values visible in ChatGPT.";
+      statusTitle.textContent = "Usage visible in ChatGPT";
+      statusDetail.textContent = "";
     }
 
     renderRows("chatgptSection", [
@@ -197,25 +173,28 @@
   }
 
   function renderCodexCards(snapshot) {
-    const section = document.getElementById("codexSection");
-    section.textContent = "";
-    const items = [
-      ["codex5h", "5h limit"],
-      ["codexWeekly", "Weekly limit"],
-      ["codexSpark5h", "GPT-5.3-Codex-Spark 5h"],
-      ["codexSparkWeekly", "GPT-5.3-Codex-Spark weekly"],
-      ["codexCredits", "Credits"],
-      ["bankedResets", "Full resets banked"]
-    ];
+    const primaryLimits = document.getElementById("primaryLimits");
+    const otherLimits = document.getElementById("otherLimitsSection");
+    const totals = document.getElementById("totalsSection");
+    primaryLimits.textContent = "";
+    otherLimits.textContent = "";
+    totals.textContent = "";
 
-    for (const [key, fallbackTitle] of items) {
-      const field = snapshot && snapshot.usage && snapshot.usage[key];
-      if (!field || !field.value) {
-        section.append(renderUnavailableCard(fallbackTitle));
-        continue;
-      }
-      section.append(renderMetricCard(field, fallbackTitle));
-    }
+    appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
+    appendMetric(primaryLimits, snapshot, "codexWeekly", "Weekly limit", "primary-metric");
+    appendMetric(otherLimits, snapshot, "codexSpark5h", "GPT-5.3-Codex-Spark 5h", "secondary-metric");
+    appendMetric(otherLimits, snapshot, "codexSparkWeekly", "GPT-5.3-Codex-Spark weekly", "secondary-metric");
+    appendMetric(totals, snapshot, "codexCredits", "Credits", "total-metric");
+    appendMetric(totals, snapshot, "bankedResets", "Full resets banked", "total-metric");
+  }
+
+  function appendMetric(section, snapshot, key, fallbackTitle, className) {
+    const field = snapshot && snapshot.usage && snapshot.usage[key];
+    const card = field && field.value
+      ? renderMetricCard(field, fallbackTitle)
+      : renderUnavailableCard(fallbackTitle);
+    card.classList.add(className);
+    section.append(card);
   }
 
   function renderMetricCard(field, fallbackTitle) {
@@ -234,12 +213,12 @@
       card.style.setProperty("--metric-percent", `${remainingPercent}%`);
     }
 
-    const head = document.createElement("div");
-    head.className = "metric-head";
-
     const title = document.createElement("div");
     title.className = "metric-title";
     title.textContent = structured.label || fallbackTitle;
+
+    const body = document.createElement("div");
+    body.className = "metric-body";
 
     const value = document.createElement("div");
     value.className = "metric-value";
@@ -255,34 +234,27 @@
       valueText.textContent = "Visible";
     }
     value.append(valueText);
+    body.append(value);
 
-    head.append(title, value);
-    card.append(head);
-
-    if (hasRemainingPercent) {
-      const progress = document.createElement("div");
-      progress.className = "progress";
-      const fill = document.createElement("div");
-      fill.className = `progress-fill ${usageLevel}`;
-
-      fill.style.width = `${remainingPercent}%`;
-      progress.append(fill);
-      card.append(progress);
-    }
+    const meta = document.createElement("div");
+    meta.className = "metric-meta";
 
     if (structured.resetText) {
       const reset = document.createElement("div");
       reset.className = "metric-reset";
       reset.textContent = `Reset: ${structured.resetText}`;
-      card.append(reset);
+      meta.append(reset);
     }
 
     if (structured.expiresText) {
       const expiry = document.createElement("div");
       expiry.className = "metric-reset";
       expiry.textContent = `Expires: ${structured.expiresText}`;
-      card.append(expiry);
+      meta.append(expiry);
     }
+
+    if (meta.childElementCount) body.append(meta);
+    card.append(title, body);
 
     return card;
   }
@@ -290,20 +262,16 @@
   function renderUnavailableCard(title) {
     const card = document.createElement("div");
     card.className = "metric-card";
-    const head = document.createElement("div");
-    head.className = "metric-head";
     const label = document.createElement("div");
     label.className = "metric-title";
     label.textContent = title;
+    const body = document.createElement("div");
+    body.className = "metric-body";
     const value = document.createElement("div");
     value.className = "metric-value";
     value.textContent = "-";
-    head.append(label, value);
-    card.append(head);
-    const reset = document.createElement("div");
-    reset.className = "metric-reset";
-    reset.textContent = "Usage unavailable";
-    card.append(reset);
+    body.append(value);
+    card.append(label, body);
     return card;
   }
 
