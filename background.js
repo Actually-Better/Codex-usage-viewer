@@ -119,6 +119,15 @@ async function saveSnapshot(
   const counters = ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters]);
   const hasVisibleUsage = ChatGPTUsageModel.hasVisibleUsage(snapshot);
   const collectedAt = snapshot && snapshot.collectedAt ? snapshot.collectedAt : new Date().toISOString();
+  const acceptedCapacitySnapshot = hasVisibleUsage
+    && (source === "requested-stable" || source === "requested-best-effort")
+    ? {
+        ...capacitySnapshot,
+        collectedAt: capacitySnapshot && capacitySnapshot.collectedAt
+          ? capacitySnapshot.collectedAt
+          : collectedAt
+      }
+    : null;
   const nextState = {
     ...currentState,
     snapshot: {
@@ -129,7 +138,10 @@ async function saveSnapshot(
     counters,
     status: hasVisibleUsage ? "usage-current" : "page-snapshot",
     dataCollectedAt: hasVisibleUsage ? collectedAt : currentState.dataCollectedAt,
-    lastRefreshAt: hasVisibleUsage ? collectedAt : currentState.lastRefreshAt
+    lastRefreshAt: hasVisibleUsage ? collectedAt : currentState.lastRefreshAt,
+    ...(acceptedCapacitySnapshot
+      ? { confirmedCapacitySnapshot: acceptedCapacitySnapshot }
+      : {})
   };
   await chrome.storage.local.set({
     [storageKeys.state]: nextState,
@@ -198,11 +210,14 @@ async function refreshOnce(reason) {
       popupRequested: reason === "popup",
       acceptingPopupJoin: true
     };
-    analyticsRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
+    const trackedRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
       .finally(() => {
-        analyticsRefreshPromise = null;
-        analyticsRefreshContext = null;
+        if (analyticsRefreshPromise === trackedRefreshPromise) {
+          analyticsRefreshPromise = null;
+          analyticsRefreshContext = null;
+        }
       });
+    analyticsRefreshPromise = trackedRefreshPromise;
   } else if (reason === "popup" && analyticsRefreshContext) {
     if (!analyticsRefreshContext.acceptingPopupJoin) {
       return analyticsRefreshPromise.then(() => refreshOnce("popup"));
@@ -679,8 +694,8 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
   if (expectedCapacityGeneration !== capacityGeneration) {
     return { ignored: true, reason: "Capacity session changed while initializing settings." };
   }
-  const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
   const usageState = data[storageKeys.state];
+  const confirmedCapacitySnapshot = usageState && usageState.confirmedCapacitySnapshot;
   const rawMonitorState = data[storageKeys.capacityState];
   let available;
   if (isSignedOutUsageState(usageState)) {
@@ -688,8 +703,13 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
     await clearCapacityMonitorStateSerialized();
     return { suppressed: true };
   } else if (rawMonitorState === undefined || rawMonitorState === null) {
-    const baseline = isFreshCapacitySnapshot(snapshot)
-      ? CodexCapacityMonitor.evaluateSnapshot(snapshot, null, settings, snapshot.collectedAt)
+    const baseline = isFreshCapacitySnapshot(confirmedCapacitySnapshot)
+      ? CodexCapacityMonitor.evaluateSnapshot(
+          confirmedCapacitySnapshot,
+          null,
+          settings,
+          confirmedCapacitySnapshot.collectedAt
+        )
       : CodexCapacityMonitor.evaluateSnapshot(null, null, settings);
     await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
     available = CodexCapacityMonitor.extractFreshStateCounters(baseline.state);
@@ -1135,14 +1155,23 @@ function delay(ms) {
 
 async function withTimeout(promise, ms, message) {
   let timeoutId = null;
+  let timedOut = false;
   try {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(message)), ms);
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(message));
+        }, ms);
       })
     ]);
   } catch (error) {
+    if (timedOut) {
+      analyticsRefreshPromise = null;
+      analyticsRefreshContext = null;
+      await expireCapacityMonitorState().catch(() => {});
+    }
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
     const state = {
       ...(data[storageKeys.state] || {}),

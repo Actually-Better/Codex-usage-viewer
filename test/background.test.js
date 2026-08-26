@@ -451,14 +451,16 @@ test("supported browsers render the percentage as a larger custom action icon ba
   assert.match(harness.calls.actionTitle.at(-1).title, /42% remaining$/);
 });
 
-test("startup seeds capacity state from a cached snapshot without alerting", async () => {
+test("startup seeds capacity state from a confirmed cached snapshot without alerting", async () => {
   const cached = visibleSnapshot();
   cached.collectedAt = new Date().toISOString();
   cached.usage.codexWeekly = {
     value: "20% remaining",
     structured: { remainingPercent: 20 }
   };
-  const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
+  const harness = createBackgroundHarness({
+    initialState: { snapshot: cached, confirmedCapacitySnapshot: cached }
+  });
 
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -479,6 +481,28 @@ test("startup seeds capacity state from a cached snapshot without alerting", asy
   assert.equal(harness.calls.notifications.at(-1).id, "codex-capacity-codexWeekly-critical");
 });
 
+test("startup never seeds unconfirmed fields from a legacy cached snapshot", async () => {
+  const cached = visibleSnapshot();
+  cached.collectedAt = new Date().toISOString();
+  cached.usage.codexWeekly = {
+    value: "20% remaining",
+    structured: { remainingPercent: 20 }
+  };
+  cached.usage.codex5h = {
+    value: "5% remaining",
+    structured: { remainingPercent: 5 }
+  };
+  const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    Object.keys(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters).length,
+    0
+  );
+  assert.equal(harness.calls.notifications.length, 0);
+});
+
 test("startup rejects a cached capacity snapshot older than retention", async () => {
   const cached = visibleSnapshot();
   cached.collectedAt = new Date(Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1).toISOString();
@@ -486,7 +510,9 @@ test("startup rejects a cached capacity snapshot older than retention", async ()
     value: "4% remaining",
     structured: { remainingPercent: 4 }
   };
-  const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
+  const harness = createBackgroundHarness({
+    initialState: { snapshot: cached, confirmedCapacitySnapshot: cached }
+  });
 
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -505,7 +531,11 @@ test("startup never seeds capacity from a signed-out cached snapshot", async () 
     structured: { remainingPercent: 4 }
   };
   const harness = createBackgroundHarness({
-    initialState: { status: "sign-in-required", snapshot: cached }
+    initialState: {
+      status: "sign-in-required",
+      snapshot: cached,
+      confirmedCapacitySnapshot: cached
+    }
   });
 
   await new Promise((resolve) => setImmediate(resolve));
@@ -619,6 +649,10 @@ test("a transient optional counter stays in popup data but cannot alert", async 
   const result = await harness.run("requestSnapshotWithRetry(7)");
 
   assert.equal(result.state.snapshot.usage.codex5h.structured.remainingPercent, 5);
+  assert.deepEqual(
+    Object.keys(result.state.confirmedCapacitySnapshot.usage),
+    ["codexWeekly"]
+  );
   assert.deepEqual(
     Array.from(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].availableKeys),
     ["codexWeekly"]
@@ -916,6 +950,40 @@ test("sign-out during offscreen setup suppresses the pending alert sound", async
   await Promise.all([playing, clearing]);
 
   assert.equal(harness.calls.soundMessages.length, 0);
+});
+
+test("a popup timeout expires stale capacity and abandons the hung refresh", async () => {
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: exhausted.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.storage[ChatGPTUsageConfig.storageKeys.capacityState]
+    .counters.codexWeekly.lastSeenAt = new Date(
+      Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1
+    ).toISOString();
+  harness.calls.clearedNotifications.length = 0;
+  harness.context.hungRefresh = new Promise(() => {});
+  harness.run(`analyticsRefreshPromise = hungRefresh;
+    analyticsRefreshContext = { popupRequested: true, acceptingPopupJoin: true };`);
+
+  const result = await harness.run(
+    "withTimeout(hungRefresh, 1, 'Refresh timed out.')"
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(harness.run("analyticsRefreshPromise === null"), true);
+  assert.equal(harness.run("analyticsRefreshContext === null"), true);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly,
+    undefined
+  );
+  assert.ok(harness.calls.clearedNotifications.includes(
+    "codex-capacity-codexWeekly-exhausted"
+  ));
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
 test("startup normalization preserves settings changed after its first read", async () => {
