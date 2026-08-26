@@ -10,6 +10,7 @@
     enableSounds: false
   });
   const PREVENTIVE_THRESHOLD = 25;
+  const COUNTER_STALE_AFTER_MS = 30 * 60 * 1000;
   const COUNTERS = Object.freeze([
     { key: "codexWeekly", label: "Weekly usage" },
     { key: "codex5h", label: "5-hour usage" },
@@ -73,10 +74,12 @@
     const settings = normalizeSettings(rawSettings);
     const previous = normalizeMonitorState(previousState);
     const available = extractAvailableCounters(snapshot);
-    const counters = { ...previous.counters };
+    const counters = Object.fromEntries(
+      Object.entries(previous.counters).filter(([, stored]) => isFreshObservation(stored, now))
+    );
     const events = [];
     for (const counter of available) {
-      const stored = previous.counters[counter.key];
+      const stored = counters[counter.key];
       if (stored) {
         const eventType = detectTransition(stored.remainingPercent, counter.remainingPercent, settings);
         if (eventType) events.push({ ...counter, type: eventType });
@@ -89,6 +92,24 @@
     }
     const state = { version: 1, counters, updatedAt: now };
     return { available, events, settings, state, visual: deriveVisualState(available, settings) };
+  }
+
+  function extractFreshStateCounters(rawState, now = new Date().toISOString()) {
+    const state = normalizeMonitorState(rawState);
+    return COUNTERS.flatMap((definition) => {
+      const stored = state.counters[definition.key];
+      if (!stored || !isFreshObservation(stored, now)) return [];
+      return [{ ...definition, ...stored }];
+    });
+  }
+
+  function isFreshObservation(stored, now) {
+    const lastSeenAt = Date.parse(stored && stored.lastSeenAt);
+    const currentTime = Date.parse(now);
+    return Number.isFinite(lastSeenAt)
+      && Number.isFinite(currentTime)
+      && currentTime >= lastSeenAt
+      && currentTime - lastSeenAt <= COUNTER_STALE_AFTER_MS;
   }
 
   function detectTransition(previous, current, settings) {
@@ -207,6 +228,7 @@
 
   const api = {
     BADGE_COLORS,
+    COUNTER_STALE_AFTER_MS,
     COUNTERS,
     DEFAULT_SETTINGS,
     PREVENTIVE_THRESHOLD,
@@ -216,6 +238,7 @@
     detectTransition,
     evaluateSnapshot,
     extractAvailableCounters,
+    extractFreshStateCounters,
     normalizeMonitorState,
     normalizeSettings,
     shouldNotify,

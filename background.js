@@ -125,13 +125,16 @@ async function saveSnapshot(snapshot, tab, source) {
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
-  if (hasVisibleUsage) {
+  if (hasVisibleUsage && (source === "requested-stable" || source === "requested-best-effort")) {
     await processCapacitySnapshot(nextState.snapshot).catch(() => {});
   }
   return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
 
 async function saveContentSnapshot(snapshot, tab) {
+  if (snapshot && snapshot.loginStatus === "logged-out") {
+    await clearCapacityMonitorState();
+  }
   if (snapshot && snapshot.codexAnalytics && !snapshot.domUsageVisible) {
     return { ok: true, ignored: true, reason: "Codex Analytics usage not visible yet." };
   }
@@ -571,20 +574,34 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
       : "The temporary tab responded, but the Codex Analytics route was not detected yet."
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
+  if (pageSnapshot.loginStatus === "logged-out") {
+    await clearCapacityMonitorState();
+  }
   return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
 }
 
 async function initializeCapacityUi() {
   const data = await chrome.storage.local.get([
     storageKeys.state,
-    storageKeys.capacitySettings
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
   ]);
   const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
   if (JSON.stringify(data[storageKeys.capacitySettings]) !== JSON.stringify(settings)) {
     await chrome.storage.local.set({ [storageKeys.capacitySettings]: settings });
   }
   const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
-  const available = CodexCapacityMonitor.extractAvailableCounters(snapshot);
+  const rawMonitorState = data[storageKeys.capacityState];
+  let available;
+  if (rawMonitorState === undefined || rawMonitorState === null) {
+    const baseline = CodexCapacityMonitor.evaluateSnapshot(snapshot, null, settings);
+    await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
+    available = baseline.available;
+  } else if (rawMonitorState.suppressed) {
+    available = [];
+  } else {
+    available = CodexCapacityMonitor.extractFreshStateCounters(rawMonitorState);
+  }
   await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
 }
 
@@ -613,6 +630,7 @@ async function processCapacitySnapshotSerialized(snapshot) {
   }
   await chrome.storage.local.set(storageUpdate);
   await applyCapacityVisual(evaluation.visual);
+  await clearRecoveredExhaustedNotifications(evaluation.available);
 
   for (const event of evaluation.events) {
     if (CodexCapacityMonitor.shouldNotify(event, evaluation.settings)) {
@@ -626,11 +644,41 @@ async function processCapacitySnapshotSerialized(snapshot) {
 }
 
 async function applyCapacityVisualFromStoredSnapshot(rawSettings) {
-  const data = await chrome.storage.local.get([storageKeys.state]);
-  const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
-  const available = CodexCapacityMonitor.extractAvailableCounters(snapshot);
+  const data = await chrome.storage.local.get([storageKeys.capacityState]);
+  const monitorState = data[storageKeys.capacityState];
+  const available = monitorState && !monitorState.suppressed
+    ? CodexCapacityMonitor.extractFreshStateCounters(monitorState)
+    : [];
   const visual = CodexCapacityMonitor.deriveVisualState(available, rawSettings);
   await applyCapacityVisual(visual);
+}
+
+async function clearCapacityMonitorState() {
+  const data = await chrome.storage.local.get([storageKeys.capacitySettings]);
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  await chrome.storage.local.set({
+    [storageKeys.capacityState]: {
+      version: 1,
+      counters: {},
+      updatedAt: new Date().toISOString(),
+      suppressed: true
+    }
+  });
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState([], settings));
+  await Promise.all(CodexCapacityMonitor.COUNTERS.map((counter) => (
+    clearCapacityNotification(counter.key, "exhausted")
+  )));
+}
+
+async function clearRecoveredExhaustedNotifications(availableCounters) {
+  await Promise.all((availableCounters || [])
+    .filter((counter) => counter.remainingPercent > 0)
+    .map((counter) => clearCapacityNotification(counter.key, "exhausted")));
+}
+
+async function clearCapacityNotification(counterKey, type) {
+  if (!chrome.notifications || !chrome.notifications.clear) return false;
+  return chrome.notifications.clear(`codex-capacity-${counterKey}-${type}`).catch(() => false);
 }
 
 async function applyCapacityVisual(visual) {

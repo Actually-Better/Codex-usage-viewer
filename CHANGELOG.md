@@ -6,6 +6,7 @@ All notable user-facing changes are documented here.
 
 - Add persisted remaining-capacity states for preventive (25%), configurable low/critical thresholds, exhausted (0%), and reset-to-100% transitions.
 - Add larger dynamically rendered toolbar percentages based on the lowest actually available limit, with a native-badge fallback and a setting to hide the permanent percentage outside warning/critical states.
+- Seed upgrade baselines, expire stale observations, suppress state on sign-out, evaluate alerts only from accepted refresh reads, and clear persistent exhausted notifications on recovery.
 - Add deduplicated native notifications for low, critical, exhausted, and optional reset events, plus optional offscreen audio that is disabled by default.
 - Treat the 5-hour limit as optional throughout alerts and badge calculations; missing, null, or invalid counters never become a false 0%.
 - Add compact Settings controls for notifications, reset notifications, toolbar percentage, low/critical thresholds, and sounds.

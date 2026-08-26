@@ -81,6 +81,24 @@ test("temporary 5-hour disappearance retains its prior observation", () => {
   assert.equal(returned.events[0].type, "low");
 });
 
+test("stale observations rebaseline instead of creating cross-account alerts", () => {
+  const initial = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot({ codexWeekly: 80 }),
+    null,
+    {},
+    "2026-08-26T08:00:00.000Z"
+  );
+  const result = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot({ codexWeekly: 5 }),
+    initial.state,
+    {},
+    "2026-08-26T08:31:00.000Z"
+  );
+
+  assert.equal(result.events.length, 0);
+  assert.equal(result.state.counters.codexWeekly.remainingPercent, 5);
+});
+
 test("a 5-hour counter can appear later without a false first alert", () => {
   const initial = CodexCapacityMonitor.evaluateSnapshot(snapshot({ codexWeekly: 60 }), null, {});
   const result = CodexCapacityMonitor.evaluateSnapshot(

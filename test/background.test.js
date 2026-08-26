@@ -19,7 +19,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -38,6 +38,10 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       async create(id, options) {
         calls.notifications.push({ id, ...options });
         return id;
+      },
+      async clear(id) {
+        calls.clearedNotifications.push(id);
+        return true;
       }
     },
     runtime: {
@@ -260,6 +264,7 @@ test("capacity alerts persist crossings and never repeat the same alert", async 
     "codex-capacity-codexWeekly-exhausted",
     "codex-capacity-codexWeekly-reset"
   ]);
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
 
   await processWeekly(10);
   assert.equal(harness.calls.notifications.length, 5);
@@ -307,6 +312,98 @@ test("supported browsers render the percentage as a larger custom action icon ba
   assert.equal(harness.calls.badgeText.at(-1).text, "");
   assert.deepEqual(Object.keys(harness.calls.actionIcon.at(-1).imageData), ["16", "32", "48"]);
   assert.match(harness.calls.actionTitle.at(-1).title, /42% remaining$/);
+});
+
+test("startup seeds capacity state from a cached snapshot without alerting", async () => {
+  const cached = visibleSnapshot();
+  cached.usage.codexWeekly = {
+    value: "20% remaining",
+    structured: { remainingPercent: 20 }
+  };
+  const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
+    20
+  );
+  assert.equal(harness.calls.notifications.length, 0);
+
+  await harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: "5% remaining",
+        structured: { remainingPercent: 5 }
+      }
+    }
+  })})`);
+  assert.equal(harness.calls.notifications.at(-1).id, "codex-capacity-codexWeekly-critical");
+});
+
+test("content snapshots never emit alerts before the accepted stable read", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const snapshotAt = (remainingPercent) => ({
+    status: "ok",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: true,
+    usage: {
+      codexWeekly: {
+        value: `${remainingPercent}% remaining`,
+        structured: { remainingPercent }
+      }
+    }
+  });
+  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(10))}, { id: 7 })`);
+  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(5))}, { id: 7 })`);
+
+  assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
+    11
+  );
+
+  await harness.run(`saveSnapshot(${JSON.stringify(snapshotAt(5))}, { id: 7 }, "requested-stable")`);
+  assert.deepEqual(
+    harness.calls.notifications.map((notification) => notification.id),
+    ["codex-capacity-codexWeekly-critical"]
+  );
+});
+
+test("explicit sign-out suppresses cached capacity and clears exhausted notifications", async () => {
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: exhausted.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.clearedNotifications.length = 0;
+
+  await harness.run(`saveContentSnapshot(${JSON.stringify({
+    status: "ok",
+    loginStatus: "logged-out",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  })}, { id: 7 })`);
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+  assert.equal(
+    Object.keys(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters).length,
+    0
+  );
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
 function visibleSnapshot() {
