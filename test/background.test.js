@@ -341,6 +341,24 @@ test("startup seeds capacity state from a cached snapshot without alerting", asy
   assert.equal(harness.calls.notifications.at(-1).id, "codex-capacity-codexWeekly-critical");
 });
 
+test("startup never seeds capacity from a signed-out cached snapshot", async () => {
+  const cached = visibleSnapshot();
+  cached.usage.codexWeekly = {
+    value: "4% remaining",
+    structured: { remainingPercent: 4 }
+  };
+  const harness = createBackgroundHarness({
+    initialState: { status: "sign-in-required", snapshot: cached }
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].availableKeys.length, 0);
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+  assert.equal(harness.calls.notifications.length, 0);
+});
+
 test("content snapshots never emit alerts before the accepted stable read", async () => {
   const baseline = CodexCapacityMonitor.evaluateSnapshot({
     usage: {
@@ -404,6 +422,51 @@ test("explicit sign-out suppresses cached capacity and clears exhausted notifica
   );
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
+test("a logged-out retry discards usage accumulated earlier in the same refresh", async () => {
+  const harness = createBackgroundHarness({
+    snapshot(callNumber) {
+      if (callNumber === 1) {
+        const visible = visibleSnapshot();
+        visible.usage.codexWeekly = {
+          value: "5% remaining",
+          structured: { remainingPercent: 5 }
+        };
+        return visible;
+      }
+      return {
+        status: "ok",
+        loginStatus: "logged-out",
+        codexAnalytics: { pageDetected: true },
+        domUsageVisible: false,
+        usage: {}
+      };
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const result = await harness.run("requestSnapshotWithRetry(7)");
+
+  assert.equal(result.state.status, "sign-in-required");
+  assert.equal(harness.calls.sendMessage, 25);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+  assert.equal(harness.calls.notifications.length, 0);
+});
+
+test("disabling notifications clears every capacity alert type", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.clearedNotifications.length = 0;
+
+  await harness.run(`handleCapacitySettingsChanged(${JSON.stringify({
+    enableNotifications: false
+  })})`);
+
+  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-reset"));
 });
 
 function visibleSnapshot() {

@@ -74,7 +74,12 @@ test("temporary 5-hour disappearance retains its prior observation", () => {
   const absent = CodexCapacityMonitor.evaluateSnapshot(snapshot({ codexWeekly: 49 }), initial.state, {});
   assert.equal(absent.events.length, 0);
   assert.equal(absent.state.counters.codex5h.remainingPercent, 11);
+  assert.deepEqual(absent.state.availableKeys, ["codexWeekly"]);
   assert.deepEqual(absent.available.map((counter) => counter.key), ["codexWeekly"]);
+  assert.deepEqual(
+    CodexCapacityMonitor.extractFreshStateCounters(absent.state).map((counter) => counter.key),
+    ["codexWeekly"]
+  );
 
   const returned = CodexCapacityMonitor.evaluateSnapshot(snapshot({ codexWeekly: 48, codex5h: 10 }), absent.state, {});
   assert.equal(returned.events[0].key, "codex5h");

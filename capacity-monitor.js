@@ -53,7 +53,16 @@
         lastSeenAt: typeof stored.lastSeenAt === "string" ? stored.lastSeenAt : null
       };
     }
-    return { version: 1, counters, updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null };
+    const availableKeys = Array.isArray(value.availableKeys)
+      ? COUNTERS.map((definition) => definition.key)
+        .filter((key) => value.availableKeys.includes(key) && counters[key])
+      : [];
+    return {
+      version: 2,
+      counters,
+      availableKeys,
+      updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
+    };
   }
 
   function extractAvailableCounters(snapshot) {
@@ -90,7 +99,12 @@
         lastSeenAt: now
       };
     }
-    const state = { version: 1, counters, updatedAt: now };
+    const state = {
+      version: 2,
+      counters,
+      availableKeys: available.map((counter) => counter.key),
+      updatedAt: now
+    };
     return { available, events, settings, state, visual: deriveVisualState(available, settings) };
   }
 
@@ -98,7 +112,7 @@
     const state = normalizeMonitorState(rawState);
     return COUNTERS.flatMap((definition) => {
       const stored = state.counters[definition.key];
-      if (!stored || !isFreshObservation(stored, now)) return [];
+      if (!state.availableKeys.includes(definition.key) || !stored || !isFreshObservation(stored, now)) return [];
       return [{ ...definition, ...stored }];
     });
   }
