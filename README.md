@@ -27,6 +27,11 @@ Recommended screenshots:
   - Green: more than 50% remaining.
   - Amber: 15% to 50% remaining.
   - Red: less than 15% remaining.
+- Evaluates every available percentage limit as remaining capacity, with preventive (25%), low, critical, exhausted, and reset states.
+- Detects downward threshold crossings instead of repeatedly alerting on every read in the same range.
+- Treats Weekly usage as the primary limit and 5-hour usage as optional; a missing or invalid 5-hour value is ignored rather than converted to 0%.
+- Shows the lowest actually available percentage on the toolbar icon when enabled.
+- Supports native reset/low/critical notifications and optional local alert sounds.
 - Stores only local metadata in `chrome.storage.local`.
 
 ## Privacy
@@ -59,12 +64,22 @@ When exact usage is not visible, the extension will show it as unavailable rathe
 - It does not infer hidden limits, account entitlements, or exact reset behavior.
 - Browser and account A/B tests can make values unavailable.
 - Diagnostics are intentionally redacted and do not include raw page text.
+- Background alerts are only as current as successful visible Analytics reads. The extension checks every 15 minutes and does not poll private endpoints or invent intermediate values.
+- If a scheduled read requires sign-in or returns no reliable percentage, no threshold notification is generated from that failed read.
 
 ## Compatibility
 
 - Chrome and Edge extensions using Manifest V3.
 - `https://chatgpt.com/*` and `https://chat.openai.com/*`.
 - English and Spanish Codex usage text when the values are visible in the ChatGPT/Codex UI.
+
+### Extension permissions
+
+- `alarms`: run the existing 15-minute background refresh.
+- `storage`: persist derived usage, threshold crossings, and local settings.
+- `notifications`: show reset, low-capacity, critical, and exhausted alerts.
+- `offscreen`: play a short local tone only when **Enable sounds** is turned on. The audio document uses the `AUDIO_PLAYBACK` reason and is not used to keep the service worker alive.
+- Host access remains limited to the existing ChatGPT domains used for visible-UI extraction.
 
 The extension may need parser updates when ChatGPT changes page structure, wording, model names, or the Codex usage page location.
 
@@ -107,10 +122,27 @@ When a value cannot be found from visible text, the extension leaves that metric
 - A manual refresh reuses Analytics only when you are already viewing it. From any other page it opens a temporary Analytics tab in the background, including when Analytics exists only in the background. The temporary tab is closed after reading without changing focus unless you activate it at any point; adopted tabs remain preserved even if you switch away again before reading finishes. If sign-in is required, it remains open in the background so you can select it and sign in through ChatGPT; selecting it transfers ownership to you immediately, including between refreshes. Repeated refreshes keep the existing extension-owned sign-in tab and discard any newly created duplicate; automatic inactive redirects remain extension-owned and are returned to Analytics for the next manual read, while a tab you activate is preserved as user-owned. Ownership is session-scoped so a numeric tab ID is never trusted after a browser restart.
 - The 15-minute periodic check uses the same background-tab recovery path. If its scheduled tab requires sign-in, it is closed and the popup asks you to run a manual refresh. The extension also repairs the periodic alarm whenever its background worker starts.
 - The popup keeps a compact paired layout: login with plan, the 5-hour limit with the weekly limit, both Spark limits together, and credits with banked full resets. Percentage metrics use small circular gauges so they remain legible in two columns.
+- Open **Settings** to enable or disable notifications, reset notifications, the permanent toolbar percentage, low/critical thresholds, and sounds. Defaults are notifications on, reset notifications on, toolbar percentage on, low at 10%, critical at 5%, and sounds off.
+- With the permanent toolbar percentage disabled, normal and preventive states keep the badge empty. Warning, critical, and exhausted states may still show the percentage while the alert condition remains active.
+- The toolbar icon renders a larger compact number for the lowest percentage among limits present in the latest valid snapshot, while the tooltip keeps the explicit `% remaining` wording. Browsers without worker canvas support fall back to the native badge. Missing, null, or invalid values are excluded completely.
 - Each page attempt samples Analytics every 400 ms for up to 10 seconds. A fallback can therefore extend the full refresh, whose timeout is 45 seconds. The reader observes at least 13 reads after the first metric and requires five stable merged reads before accepting the snapshot. Metrics found in different reads are accumulated instead of replacing one another.
 - The main status shows a friendly age such as **Last refresh: 5 min ago**. Diagnostics retain the exact collection and attempt timestamps.
 - Open **Diagnostics** only when troubleshooting. It shows extractor version, page detection, visible fields, and local refresh timing.
 - Use **Copy diagnostics** when opening an issue. The copied payload is redacted and omits raw page text, full URLs, conversation content, and account identifiers.
+
+### Capacity alert behavior
+
+- Above 25%: normal state.
+- Crossing downward to 25%: preventive badge color, without a system notification.
+- Crossing the configured low threshold (10% by default): one low-capacity notification.
+- Crossing the configured critical threshold (5% by default): one higher-priority notification.
+- Reaching 0%: persistent critical badge and an exhausted notification; visible reset text is included without inferring a duration.
+- Moving from below 100% to exactly 100%: clear the previous range naturally, restore the normal state, and optionally notify the reset once.
+- Repeated reads in the same range do not notify again. A direct jump across multiple thresholds emits only the most severe newly reached state, avoiding a burst of notifications.
+- The first valid observation establishes the baseline and visual state without creating a potentially stale notification.
+- Only stable or completed best-effort refreshes evaluate threshold crossings. DOM mutation snapshots may update the popup cache but cannot emit alerts.
+- Capacity baselines are seeded during upgrades only while signed in and when the cached read is at most 35 minutes old, cleared on explicit sign-out, and re-established without alerts after two missed 15-minute observations.
+- A persistent exhausted notification is cleared as soon as that counter reports capacity above 0% or its observation expires; disabling notifications clears any capacity alerts still visible.
 
 ## Troubleshooting
 
@@ -125,7 +157,10 @@ When a value cannot be found from visible text, the extension leaves that metric
 
 ```text
 background.js
+capacity-monitor.js
 content-script.js
+offscreen.html
+offscreen.js
 package.json
 manifest.json
 popup.html
@@ -153,8 +188,8 @@ npm test
 
 ## Testing
 
-- `npm run check` runs `node --check` against the extension JavaScript files.
-- `npm test` runs English/Spanish parser tests and refresh-orchestration tests for caching, concurrency, and tab creation.
+- `npm run check` runs `node --check` against every extension JavaScript file.
+- `npm test` runs English/Spanish parser tests, refresh-orchestration tests, popup/permission checks, and capacity transition/deduplication tests.
 - Manual release testing should load the unpacked extension in Chrome or Edge and verify signed-in, signed-out, unavailable-usage, and visible-usage states when possible.
 
 ## Contributing

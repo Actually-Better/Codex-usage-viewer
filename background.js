@@ -1,4 +1,4 @@
-importScripts("usage-model.js");
+importScripts("usage-model.js", "capacity-monitor.js");
 
 const { storageKeys, refreshAlarmName, refreshPeriodMinutes } = ChatGPTUsageConfig;
 const CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics";
@@ -8,9 +8,22 @@ const ANALYTICS_READ_INTERVAL_MS = 400;
 const ANALYTICS_STABLE_READS_REQUIRED = 5;
 const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
+const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+const CAPACITY_NOTIFICATION_TYPES = Object.freeze(["low", "critical", "exhausted", "reset"]);
+const ACTION_ICON_PATHS = Object.freeze({
+  16: "icons/icon-16.png",
+  32: "icons/icon-32.png",
+  48: "icons/icon-48.png"
+});
 let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
+let analyticsRefreshGeneration = 0;
 let retainedSignInTabUpdate = Promise.resolve();
+let capacityUpdate = Promise.resolve();
+let capacityInitializationPromise = Promise.resolve();
+let capacityGeneration = 0;
+let capacitySuppressed = false;
+const actionIconBitmapPromises = new Map();
 const adoptedAnalyticsTabIds = new Set();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -21,15 +34,14 @@ chrome.runtime.onInstalled.addListener(async () => {
       ? ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters])
       : ChatGPTUsageModel.defaultCounters()
   });
+  await initializeCapacityUi();
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  ensureRefreshAlarm().catch(() => {});
-});
+chrome.runtime.onStartup.addListener(() => refreshOnStartup().catch(() => {}));
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
-    refreshOnce("alarm").catch(() => {});
+    refreshWithTimeout("alarm").catch(() => {});
   }
 });
 
@@ -46,6 +58,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 ensureRefreshAlarm().catch(() => {});
+initializeCapacityUi().catch(() => {});
+
+if (chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !changes[storageKeys.capacitySettings]) return;
+    handleCapacitySettingsChanged(changes[storageKeys.capacitySettings].newValue).catch(() => {});
+  });
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
@@ -66,7 +86,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "usage:refresh") {
-    withTimeout(refreshForPopup(), REFRESH_TIMEOUT_MS, "Refresh timed out.").then(sendResponse);
+    refreshWithTimeout("popup").then(sendResponse);
     return true;
   }
 
@@ -85,12 +105,33 @@ async function recordLocalMessage(payload) {
   return { ok: true };
 }
 
-async function saveSnapshot(snapshot, tab, source) {
+async function saveSnapshot(
+  snapshot,
+  tab,
+  source,
+  expectedCapacityGeneration = capacityGeneration,
+  capacitySnapshot = snapshot,
+  expectedAnalyticsRefreshGeneration = null
+) {
   const existing = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+  assertCurrentAnalyticsRefresh(
+    Number.isInteger(expectedAnalyticsRefreshGeneration)
+      ? { generation: expectedAnalyticsRefreshGeneration }
+      : null
+  );
   const currentState = existing[storageKeys.state] || {};
   const counters = ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters]);
   const hasVisibleUsage = ChatGPTUsageModel.hasVisibleUsage(snapshot);
   const collectedAt = snapshot && snapshot.collectedAt ? snapshot.collectedAt : new Date().toISOString();
+  const acceptedCapacitySnapshot = hasVisibleUsage
+    && (source === "requested-stable" || source === "requested-best-effort")
+    ? {
+        ...capacitySnapshot,
+        collectedAt: capacitySnapshot && capacitySnapshot.collectedAt
+          ? capacitySnapshot.collectedAt
+          : collectedAt
+      }
+    : null;
   const nextState = {
     ...currentState,
     snapshot: {
@@ -101,16 +142,34 @@ async function saveSnapshot(snapshot, tab, source) {
     counters,
     status: hasVisibleUsage ? "usage-current" : "page-snapshot",
     dataCollectedAt: hasVisibleUsage ? collectedAt : currentState.dataCollectedAt,
-    lastRefreshAt: hasVisibleUsage ? collectedAt : currentState.lastRefreshAt
+    lastRefreshAt: hasVisibleUsage ? collectedAt : currentState.lastRefreshAt,
+    ...(acceptedCapacitySnapshot
+      ? { confirmedCapacitySnapshot: acceptedCapacitySnapshot }
+      : {})
   };
   await chrome.storage.local.set({
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
+  assertCurrentAnalyticsRefresh(
+    Number.isInteger(expectedAnalyticsRefreshGeneration)
+      ? { generation: expectedAnalyticsRefreshGeneration }
+      : null
+  );
+  if (hasVisibleUsage && (source === "requested-stable" || source === "requested-best-effort")) {
+    await processCapacitySnapshot(
+      capacitySnapshot,
+      expectedCapacityGeneration,
+      expectedAnalyticsRefreshGeneration
+    ).catch(() => {});
+  }
   return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
 
 async function saveContentSnapshot(snapshot, tab) {
+  if (snapshot && snapshot.loginStatus === "logged-out") {
+    await clearCapacityMonitorState();
+  }
   if (snapshot && snapshot.codexAnalytics && !snapshot.domUsageVisible) {
     return { ok: true, ignored: true, reason: "Codex Analytics usage not visible yet." };
   }
@@ -143,6 +202,37 @@ async function refreshForPopup() {
   return refreshOnce("popup");
 }
 
+async function refreshOnStartup(now = Date.now()) {
+  await ensureRefreshAlarm();
+  await initializeCapacityUi();
+  const data = await chrome.storage.local.get([storageKeys.state]);
+  if (!shouldRefreshOnStartup(data[storageKeys.state], now)) {
+    return { ok: true, skipped: true, reason: "Usage data is still recent." };
+  }
+  return refreshWithTimeout("startup");
+}
+
+function shouldRefreshOnStartup(state, now = Date.now()) {
+  const collectedAt = Date.parse(state && (state.dataCollectedAt || state.lastRefreshAt));
+  const maxAgeMs = refreshPeriodMinutes * 60 * 1000;
+  return !Number.isFinite(collectedAt)
+    || !Number.isFinite(now)
+    || now < collectedAt
+    || now - collectedAt >= maxAgeMs;
+}
+
+function refreshWithTimeout(reason) {
+  const refreshPromise = refreshOnce(reason, true);
+  const expectedRefreshGeneration = analyticsRefreshContext
+    && analyticsRefreshContext.generation;
+  return withTimeout(
+    refreshPromise,
+    REFRESH_TIMEOUT_MS,
+    "Refresh timed out.",
+    expectedRefreshGeneration
+  );
+}
+
 async function openCodexAnalyticsPage() {
   const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
   const existing = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
@@ -158,27 +248,42 @@ async function openCodexAnalyticsPage() {
   return { ok: true, tabId: tab.id, reused: false };
 }
 
-async function refreshOnce(reason) {
+async function refreshOnce(reason, boundRetry = false) {
   if (!analyticsRefreshPromise) {
+    analyticsRefreshGeneration += 1;
     analyticsRefreshContext = {
       popupRequested: reason === "popup",
-      acceptingPopupJoin: true
+      acceptingPopupJoin: true,
+      generation: analyticsRefreshGeneration
     };
-    analyticsRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
+    const trackedRefreshPromise = refreshFromAnalyticsPage(reason, analyticsRefreshContext)
       .finally(() => {
-        analyticsRefreshPromise = null;
-        analyticsRefreshContext = null;
+        if (analyticsRefreshPromise === trackedRefreshPromise) {
+          analyticsRefreshPromise = null;
+          analyticsRefreshContext = null;
+        }
       });
+    analyticsRefreshPromise = trackedRefreshPromise;
   } else if (reason === "popup" && analyticsRefreshContext) {
     if (!analyticsRefreshContext.acceptingPopupJoin) {
-      return analyticsRefreshPromise.then(() => refreshOnce("popup"));
+      const joinedGeneration = analyticsRefreshContext.generation;
+      return analyticsRefreshPromise.then(() => (
+        joinedGeneration === analyticsRefreshGeneration
+          ? boundRetry
+            ? refreshWithTimeout("popup")
+            : refreshOnce("popup")
+          : { ok: false, ignored: true, reason: "Analytics refresh expired before retry." }
+      ));
     }
     analyticsRefreshContext.popupRequested = true;
   }
   return analyticsRefreshPromise;
 }
 
-async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequested: reason === "popup" }) {
+async function refreshFromAnalyticsPage(reason, refreshContext = {
+  popupRequested: reason === "popup",
+  generation: analyticsRefreshGeneration
+}) {
   const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const activeTab = activeTabs[0] || null;
   let analyticsTab = activeTab && isCodexAnalyticsUrl(activeTab.url)
@@ -217,7 +322,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       }
     }
 
-    await markRefreshStarted(reason);
+    await markRefreshStarted(reason, refreshContext);
     if (!analyticsTab) {
       analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
@@ -227,16 +332,16 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
 
     let result;
     try {
-      result = await readAnalyticsTab(analyticsTab.id);
+      result = await readAnalyticsTab(analyticsTab.id, refreshContext);
     } catch (error) {
       if (temporaryTab) throw error;
-      await markRefreshStarted(`${reason}-temporary-fallback`);
+      await markRefreshStarted(`${reason}-temporary-fallback`, refreshContext);
       failureStage = "create-temporary";
       analyticsTab = await createBackgroundAnalyticsTab();
       temporaryTab = true;
       trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
-      result = await readAnalyticsTab(analyticsTab.id);
+      result = await readAnalyticsTab(analyticsTab.id, refreshContext);
     }
 
     if (!temporaryTab && result.fresh === false && result.pageLoginStatus !== "logged-out") {
@@ -245,17 +350,19 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       try {
         analyticsTab = await createBackgroundAnalyticsTab();
       } catch (error) {
-        return preserveResponsiveResult(responsiveResult, error, "create");
+        return preserveResponsiveResult(responsiveResult, error, "create", refreshContext);
       }
       temporaryTab = true;
       trackedTemporaryTabId = analyticsTab.id;
       failureStage = "read-temporary";
       try {
-        result = await readAnalyticsTab(analyticsTab.id);
+        result = await readAnalyticsTab(analyticsTab.id, refreshContext);
       } catch (error) {
-        return preserveResponsiveResult(responsiveResult, error, "read");
+        return preserveResponsiveResult(responsiveResult, error, "read", refreshContext);
       }
     }
+
+    assertCurrentAnalyticsRefresh(refreshContext);
 
     if (result.pageLoginStatus === "logged-in") {
       await removeRetainedSignInTabIfOwned(analyticsTab.id);
@@ -264,12 +371,12 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
     const temporaryTabRequiresSignIn = temporaryTab && result.pageLoginStatus === "logged-out";
     const retainedSignInResult = temporaryTabRequiresSignIn ? result : null;
     if (temporaryTabRequiresSignIn && !refreshContext.popupRequested) {
-      result = await markManualSignInRequired(result);
+      result = await markManualSignInRequired(result, refreshContext);
     }
     keepTemporaryTab = temporaryTabRequiresSignIn && refreshContext.popupRequested;
     refreshContext.acceptingPopupJoin = false;
     if (keepTemporaryTab && result.state.status === "sign-in-required-manual-refresh") {
-      result = await restoreRetainedSignInRequired(retainedSignInResult);
+      result = await restoreRetainedSignInRequired(retainedSignInResult, refreshContext);
     }
     if (keepTemporaryTab) {
       if (temporaryTabWasActivated) {
@@ -279,9 +386,14 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
         keepTemporaryTab = retainedTabId === analyticsTab.id && !temporaryTabWasActivated;
       }
     }
+    assertCurrentAnalyticsRefresh(refreshContext);
     return { ...result, state: { ...result.state, reason } };
   } catch (error) {
+    if (isStaleAnalyticsRefreshError(error)) {
+      return { ok: false, ignored: true, reason: error.message };
+    }
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+    assertCurrentAnalyticsRefresh(refreshContext);
     const tabCreationFailed = failureStage === "create-temporary";
     const state = {
       ...(data[storageKeys.state] || {}),
@@ -295,6 +407,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
           : "The existing Codex Analytics page did not respond after loading."
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });
+    await expireCapacityMonitorState().catch(() => {});
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
     try {
@@ -314,6 +427,27 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
       }
     }
   }
+}
+
+function isCurrentAnalyticsRefresh(refreshContext) {
+  return !refreshContext
+    || isCurrentAnalyticsRefreshGeneration(refreshContext.generation);
+}
+
+function isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration) {
+  return !Number.isInteger(expectedAnalyticsRefreshGeneration)
+    || expectedAnalyticsRefreshGeneration === analyticsRefreshGeneration;
+}
+
+function assertCurrentAnalyticsRefresh(refreshContext) {
+  if (isCurrentAnalyticsRefresh(refreshContext)) return;
+  const error = new Error("Analytics refresh expired before it could persist results.");
+  error.code = "STALE_ANALYTICS_REFRESH";
+  throw error;
+}
+
+function isStaleAnalyticsRefreshError(error) {
+  return Boolean(error && error.code === "STALE_ANALYTICS_REFRESH");
 }
 
 function serializeRetainedSignInTabUpdate(operation) {
@@ -426,16 +560,18 @@ async function createBackgroundAnalyticsTab() {
   return temporaryTab;
 }
 
-async function readAnalyticsTab(tabId) {
+async function readAnalyticsTab(tabId, refreshContext) {
   await waitForTabReadyOrDelay(tabId);
-  return requestSnapshotWithRetry(tabId);
+  assertCurrentAnalyticsRefresh(refreshContext);
+  return requestSnapshotWithRetry(tabId, refreshContext);
 }
 
-async function preserveResponsiveResult(result, fallbackError, failureStage) {
+async function preserveResponsiveResult(result, fallbackError, failureStage, refreshContext) {
   const fallbackAction = failureStage === "read"
     ? "could not be read"
     : "could not be created";
   const stored = await chrome.storage.local.get([storageKeys.state]);
+  assertCurrentAnalyticsRefresh(refreshContext);
   const currentState = stored[storageKeys.state] || result.state;
   const state = {
     ...currentState,
@@ -446,8 +582,9 @@ async function preserveResponsiveResult(result, fallbackError, failureStage) {
   return { ...result, state, fallbackFailed: true };
 }
 
-async function markManualSignInRequired(result) {
+async function markManualSignInRequired(result, refreshContext) {
   const stored = await chrome.storage.local.get([storageKeys.state]);
+  assertCurrentAnalyticsRefresh(refreshContext);
   const currentState = stored[storageKeys.state] || result.state;
   const state = {
     ...currentState,
@@ -458,8 +595,9 @@ async function markManualSignInRequired(result) {
   return { ...result, state };
 }
 
-async function restoreRetainedSignInRequired(result) {
+async function restoreRetainedSignInRequired(result, refreshContext) {
   const stored = await chrome.storage.local.get([storageKeys.state]);
+  assertCurrentAnalyticsRefresh(refreshContext);
   const currentState = stored[storageKeys.state] || result.state;
   const state = {
     ...currentState,
@@ -470,8 +608,9 @@ async function restoreRetainedSignInRequired(result) {
   return { ...result, state };
 }
 
-async function markRefreshStarted(reason) {
+async function markRefreshStarted(reason, refreshContext) {
   const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+  assertCurrentAnalyticsRefresh(refreshContext);
   const state = {
     ...(data[storageKeys.state] || {}),
     status: "refreshing-codex-analytics",
@@ -482,20 +621,41 @@ async function markRefreshStarted(reason) {
   await chrome.storage.local.set({ [storageKeys.state]: state });
 }
 
-async function requestSnapshotWithRetry(tabId) {
+async function requestSnapshotWithRetry(tabId, refreshContext) {
+  await capacityInitializationPromise;
+  assertCurrentAnalyticsRefresh(refreshContext);
+  let expectedCapacityGeneration = capacityGeneration;
+  let observedLogout = false;
   let lastError = null;
   let lastSnapshot = null;
   let accumulatedSnapshot = null;
   let lastUsageSignature = null;
   let stableUsageReads = 0;
   let firstVisibleAttempt = null;
+  const stableCapacityCounters = new Map();
 
   for (let attempt = 0; attempt < ANALYTICS_READ_ATTEMPTS; attempt += 1) {
     try {
       await delay(ANALYTICS_READ_INTERVAL_MS);
+      assertCurrentAnalyticsRefresh(refreshContext);
       const snapshot = await chrome.tabs.sendMessage(tabId, { type: "usage:collectSnapshot" });
+      assertCurrentAnalyticsRefresh(refreshContext);
       if (snapshot && snapshot.status === "ok") {
         lastSnapshot = snapshot;
+        if (snapshot.loginStatus === "logged-out") {
+          if (!observedLogout) {
+            observedLogout = true;
+            await clearCapacityMonitorState();
+            expectedCapacityGeneration = capacityGeneration;
+          }
+          accumulatedSnapshot = null;
+          lastUsageSignature = null;
+          stableUsageReads = 0;
+          firstVisibleAttempt = null;
+          stableCapacityCounters.clear();
+          continue;
+        }
+        updateStableCapacityCounters(snapshot, stableCapacityCounters);
         if (snapshot.codexAnalytics && ChatGPTUsageModel.hasVisibleUsage(snapshot)) {
           accumulatedSnapshot = mergeUsageSnapshot(accumulatedSnapshot, snapshot);
           const signature = JSON.stringify(accumulatedSnapshot.usage || {});
@@ -506,16 +666,40 @@ async function requestSnapshotWithRetry(tabId) {
           const readsSinceFirstData = attempt - firstVisibleAttempt + 1;
           if (stableUsageReads >= ANALYTICS_STABLE_READS_REQUIRED
             && readsSinceFirstData >= ANALYTICS_MIN_READS_AFTER_FIRST_DATA) {
-            return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-stable");
+            return saveSnapshot(
+              accumulatedSnapshot,
+              { id: tabId },
+              "requested-stable",
+              expectedCapacityGeneration,
+              buildStableCapacitySnapshot(accumulatedSnapshot, stableCapacityCounters),
+              refreshContext && refreshContext.generation
+            );
           }
         }
       }
     } catch (error) {
+      if (isStaleAnalyticsRefreshError(error)) throw error;
       lastError = error;
     }
   }
-  if (accumulatedSnapshot) return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-best-effort");
-  if (lastSnapshot) return saveIncompleteRefresh(lastSnapshot, tabId);
+  if (accumulatedSnapshot) {
+    return saveSnapshot(
+      accumulatedSnapshot,
+      { id: tabId },
+      "requested-best-effort",
+      expectedCapacityGeneration,
+      buildStableCapacitySnapshot(accumulatedSnapshot, stableCapacityCounters),
+      refreshContext && refreshContext.generation
+    );
+  }
+  if (lastSnapshot) {
+    return saveIncompleteRefresh(
+      lastSnapshot,
+      tabId,
+      "requested-no-new-usage",
+      refreshContext && refreshContext.generation
+    );
+  }
   throw lastError || new Error("Codex Analytics content script did not respond.");
 }
 
@@ -533,8 +717,48 @@ function mergeUsageSnapshot(accumulated, incoming) {
   };
 }
 
-async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no-new-usage") {
+function updateStableCapacityCounters(snapshot, observations) {
+  const available = new Map(CodexCapacityMonitor.extractAvailableCounters(snapshot)
+    .map((counter) => [counter.key, counter]));
+  for (const definition of CodexCapacityMonitor.COUNTERS) {
+    const counter = available.get(definition.key);
+    if (!counter) {
+      observations.delete(definition.key);
+      continue;
+    }
+    const signature = JSON.stringify([counter.remainingPercent, counter.resetText]);
+    const previous = observations.get(definition.key);
+    observations.set(definition.key, {
+      count: previous && previous.signature === signature ? previous.count + 1 : 1,
+      field: snapshot.usage[definition.key],
+      signature
+    });
+  }
+}
+
+function buildStableCapacitySnapshot(snapshot, observations) {
+  const usage = Object.fromEntries([...observations.entries()]
+    .filter(([, observation]) => observation.count >= ANALYTICS_STABLE_READS_REQUIRED)
+    .map(([key, observation]) => [key, observation.field]));
+  return {
+    ...snapshot,
+    usage,
+    domUsageVisible: Object.values(usage).some((field) => field && field.value)
+  };
+}
+
+async function saveIncompleteRefresh(
+  pageSnapshot,
+  tabId,
+  source = "requested-no-new-usage",
+  expectedAnalyticsRefreshGeneration = null
+) {
   const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+  assertCurrentAnalyticsRefresh(
+    Number.isInteger(expectedAnalyticsRefreshGeneration)
+      ? { generation: expectedAnalyticsRefreshGeneration }
+      : null
+  );
   const existingState = data[storageKeys.state] || {};
   const existingSnapshot = existingState.snapshot;
   const state = {
@@ -550,7 +774,477 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
       : "The temporary tab responded, but the Codex Analytics route was not detected yet."
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
+  if (pageSnapshot.loginStatus === "logged-out") {
+    await clearCapacityMonitorState();
+  } else {
+    await expireCapacityMonitorState();
+  }
   return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
+}
+
+function initializeCapacityUi() {
+  const expectedCapacityGeneration = capacityGeneration;
+  const result = capacityUpdate.then(
+    () => initializeCapacityUiSerialized(expectedCapacityGeneration),
+    () => initializeCapacityUiSerialized(expectedCapacityGeneration)
+  );
+  capacityInitializationPromise = result.catch(() => {});
+  capacityUpdate = capacityInitializationPromise;
+  return result;
+}
+
+async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
+  const data = await chrome.storage.local.get([
+    storageKeys.state,
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
+  ]);
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed during initialization." };
+  }
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed while initializing settings." };
+  }
+  const usageState = data[storageKeys.state];
+  const confirmedCapacitySnapshot = usageState && usageState.confirmedCapacitySnapshot;
+  const rawMonitorState = data[storageKeys.capacityState];
+  let available;
+  if (isSignedOutUsageState(usageState)) {
+    markCapacitySuppressed();
+    await clearCapacityMonitorStateSerialized();
+    return { suppressed: true };
+  } else if (rawMonitorState === undefined || rawMonitorState === null) {
+    const baseline = isFreshCapacitySnapshot(confirmedCapacitySnapshot)
+      ? CodexCapacityMonitor.evaluateSnapshot(
+          confirmedCapacitySnapshot,
+          null,
+          settings,
+          confirmedCapacitySnapshot.collectedAt
+        )
+      : CodexCapacityMonitor.evaluateSnapshot(null, null, settings);
+    await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
+    available = CodexCapacityMonitor.extractFreshStateCounters(baseline.state);
+  } else if (rawMonitorState.suppressed) {
+    capacitySuppressed = true;
+    available = [];
+  } else {
+    capacitySuppressed = false;
+    available = CodexCapacityMonitor.extractFreshStateCounters(rawMonitorState);
+  }
+  if (rawMonitorState && !rawMonitorState.suppressed) {
+    await clearExpiredExhaustedNotifications(rawMonitorState);
+  }
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
+}
+
+function isFreshCapacitySnapshot(snapshot, now = Date.now()) {
+  const collectedAt = Date.parse(snapshot && snapshot.collectedAt);
+  return Number.isFinite(collectedAt)
+    && Number.isFinite(now)
+    && now >= collectedAt
+    && now - collectedAt <= CodexCapacityMonitor.COUNTER_STALE_AFTER_MS;
+}
+
+function processCapacitySnapshot(
+  snapshot,
+  expectedCapacityGeneration = capacityGeneration,
+  expectedAnalyticsRefreshGeneration = null
+) {
+  const result = capacityUpdate.then(
+    () => processCapacitySnapshotSerialized(
+      snapshot,
+      expectedCapacityGeneration,
+      expectedAnalyticsRefreshGeneration
+    ),
+    () => processCapacitySnapshotSerialized(
+      snapshot,
+      expectedCapacityGeneration,
+      expectedAnalyticsRefreshGeneration
+    )
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function processCapacitySnapshotSerialized(
+  snapshot,
+  expectedCapacityGeneration,
+  expectedAnalyticsRefreshGeneration
+) {
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed before processing." };
+  }
+  if (!isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)) {
+    return { ignored: true, reason: "Analytics refresh expired before capacity processing." };
+  }
+  const data = await chrome.storage.local.get([
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
+  ]);
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed during processing." };
+  }
+  if (!isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)) {
+    return { ignored: true, reason: "Analytics refresh expired during capacity processing." };
+  }
+  const evaluation = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot,
+    data[storageKeys.capacityState],
+    data[storageKeys.capacitySettings]
+  );
+  const storageUpdate = { [storageKeys.capacityState]: evaluation.state };
+  await chrome.storage.local.set(storageUpdate);
+  if (expectedCapacityGeneration === capacityGeneration) {
+    capacitySuppressed = false;
+  }
+  await applyCapacityVisual(evaluation.visual);
+  await clearRecoveredOrExpiredExhaustedNotifications(
+    data[storageKeys.capacityState],
+    evaluation
+  );
+
+  for (const event of evaluation.events) {
+    if (expectedCapacityGeneration !== capacityGeneration) break;
+    if (!isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)) break;
+    if (CodexCapacityMonitor.shouldNotify(event, evaluation.settings)) {
+      await showCapacityNotification(event).catch(() => {});
+    }
+  }
+  if (expectedCapacityGeneration === capacityGeneration
+    && isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)
+    && evaluation.events.some((event) => CodexCapacityMonitor.shouldPlaySound(event, evaluation.settings))) {
+    await playCapacitySound(
+      expectedCapacityGeneration,
+      expectedAnalyticsRefreshGeneration
+    ).catch(() => {});
+  }
+  return evaluation;
+}
+
+async function applyCapacityVisualFromStoredSnapshot(rawSettings) {
+  const data = await chrome.storage.local.get([storageKeys.capacityState]);
+  const monitorState = data[storageKeys.capacityState];
+  const available = monitorState && !monitorState.suppressed
+    ? CodexCapacityMonitor.extractFreshStateCounters(monitorState)
+    : [];
+  const visual = CodexCapacityMonitor.deriveVisualState(available, rawSettings);
+  await applyCapacityVisual(visual);
+}
+
+function handleCapacitySettingsChanged(rawSettings) {
+  const result = capacityUpdate.then(
+    () => handleCapacitySettingsChangedSerialized(rawSettings),
+    () => handleCapacitySettingsChangedSerialized(rawSettings)
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function handleCapacitySettingsChangedSerialized(rawSettings) {
+  const settings = CodexCapacityMonitor.normalizeSettings(rawSettings);
+  if (!settings.enableNotifications) {
+    await clearAllCapacityNotifications();
+  }
+  await applyCapacityVisualFromStoredSnapshot(settings);
+}
+
+function isSignedOutUsageState(state) {
+  return Boolean(state && (
+    state.status === "sign-in-required"
+    || state.status === "sign-in-required-manual-refresh"
+    || (state.snapshot && state.snapshot.loginStatus === "logged-out")
+  ));
+}
+
+function createSuppressedCapacityState() {
+  return {
+    version: 2,
+    counters: {},
+    availableKeys: [],
+    updatedAt: new Date().toISOString(),
+    suppressed: true
+  };
+}
+
+function clearCapacityMonitorState() {
+  if (!markCapacitySuppressed()) return capacityUpdate;
+  const result = capacityUpdate.then(
+    () => clearCapacityMonitorStateSerialized(),
+    () => clearCapacityMonitorStateSerialized()
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+function expireCapacityMonitorState() {
+  const result = capacityUpdate.then(
+    () => expireCapacityMonitorStateSerialized(),
+    () => expireCapacityMonitorStateSerialized()
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function expireCapacityMonitorStateSerialized() {
+  if (capacitySuppressed) return { suppressed: true };
+  const data = await chrome.storage.local.get([
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
+  ]);
+  const previous = CodexCapacityMonitor.normalizeMonitorState(data[storageKeys.capacityState]);
+  const counters = Object.fromEntries(Object.entries(previous.counters)
+    .filter(([, observation]) => isFreshCapacityObservation(observation)));
+  const state = {
+    version: 2,
+    counters,
+    availableKeys: previous.availableKeys.filter((key) => counters[key]),
+    updatedAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ [storageKeys.capacityState]: state });
+  await clearExpiredExhaustedNotifications(previous);
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  const available = CodexCapacityMonitor.extractFreshStateCounters(state);
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
+  return state;
+}
+
+function markCapacitySuppressed() {
+  if (capacitySuppressed) return false;
+  capacitySuppressed = true;
+  capacityGeneration += 1;
+  return true;
+}
+
+async function clearCapacityMonitorStateSerialized() {
+  const data = await chrome.storage.local.get([storageKeys.capacitySettings]);
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  await chrome.storage.local.set({
+    [storageKeys.capacityState]: createSuppressedCapacityState()
+  });
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState([], settings));
+  await clearAllCapacityNotifications();
+}
+
+async function clearRecoveredOrExpiredExhaustedNotifications(previousState, evaluation) {
+  const previous = CodexCapacityMonitor.normalizeMonitorState(previousState);
+  const next = CodexCapacityMonitor.normalizeMonitorState(evaluation && evaluation.state);
+  const recoveredKeys = (evaluation && evaluation.available ? evaluation.available : [])
+    .filter((counter) => counter.remainingPercent > 0)
+    .map((counter) => counter.key);
+  const expiredKeys = CodexCapacityMonitor.COUNTERS
+    .map((counter) => counter.key)
+    .filter((key) => (
+      previous.counters[key]
+      && previous.counters[key].remainingPercent === 0
+      && !next.counters[key]
+    ));
+  await Promise.all([...new Set([...recoveredKeys, ...expiredKeys])]
+    .map((key) => clearCapacityNotification(key, "exhausted")));
+}
+
+async function clearExpiredExhaustedNotifications(previousState) {
+  const previous = CodexCapacityMonitor.normalizeMonitorState(previousState);
+  await Promise.all(CodexCapacityMonitor.COUNTERS
+    .map((counter) => counter.key)
+    .filter((key) => (
+      previous.counters[key]
+      && previous.counters[key].remainingPercent === 0
+      && !isFreshCapacityObservation(previous.counters[key])
+    ))
+    .map((key) => clearCapacityNotification(key, "exhausted")));
+}
+
+function isFreshCapacityObservation(observation, now = Date.now()) {
+  const lastSeenAt = Date.parse(observation && observation.lastSeenAt);
+  return Number.isFinite(lastSeenAt)
+    && Number.isFinite(now)
+    && now >= lastSeenAt
+    && now - lastSeenAt <= CodexCapacityMonitor.COUNTER_STALE_AFTER_MS;
+}
+
+function clearCapacityNotification(counterKey, type) {
+  if (!chrome.notifications || !chrome.notifications.clear) return false;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(value));
+    };
+    try {
+      const result = chrome.notifications.clear(
+        `codex-capacity-${counterKey}-${type}`,
+        finish
+      );
+      if (result && typeof result.then === "function") {
+        result.then(finish, () => finish(false));
+      } else if (result !== undefined) {
+        finish(result);
+      }
+    } catch (_) {
+      finish(false);
+    }
+  });
+}
+
+async function clearAllCapacityNotifications() {
+  await Promise.all(CodexCapacityMonitor.COUNTERS.flatMap((counter) => (
+    CAPACITY_NOTIFICATION_TYPES.map((type) => clearCapacityNotification(counter.key, type))
+  )));
+}
+
+async function applyCapacityVisual(visual) {
+  if (!chrome.action) return;
+  let usesCustomIcon = false;
+  if (visual.badgeText && chrome.action.setIcon) {
+    const imageData = await buildCapacityActionIcon(visual.badgeText, visual.badgeColor).catch(() => null);
+    if (imageData) {
+      try {
+        await chrome.action.setIcon({ imageData });
+        usesCustomIcon = true;
+      } catch (_) {
+        usesCustomIcon = false;
+      }
+    }
+  }
+  if (!usesCustomIcon && chrome.action.setIcon) {
+    await chrome.action.setIcon({ path: ACTION_ICON_PATHS }).catch(() => {});
+  }
+
+  const updates = [];
+  if (chrome.action.setBadgeText) {
+    updates.push(chrome.action.setBadgeText({ text: usesCustomIcon ? "" : visual.badgeText }));
+  }
+  if (chrome.action.setBadgeBackgroundColor) {
+    updates.push(chrome.action.setBadgeBackgroundColor({ color: visual.badgeColor }));
+  }
+  if (!usesCustomIcon && chrome.action.setBadgeTextColor) {
+    updates.push(chrome.action.setBadgeTextColor({ color: "#ffffff" }));
+  }
+  if (chrome.action.setTitle) {
+    updates.push(chrome.action.setTitle({ title: visual.title }));
+  }
+  await Promise.all(updates);
+}
+
+async function buildCapacityActionIcon(text, color) {
+  if (
+    typeof OffscreenCanvas !== "function"
+    || typeof createImageBitmap !== "function"
+    || typeof fetch !== "function"
+  ) {
+    return null;
+  }
+
+  const entries = await Promise.all(Object.entries(ACTION_ICON_PATHS).map(async ([sizeKey, path]) => {
+    const size = Number(sizeKey);
+    const canvas = new OffscreenCanvas(size, size);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("2D canvas is unavailable.");
+    context.drawImage(await loadActionIconBitmap(size, path), 0, 0, size, size);
+    drawCapacityBadge(context, size, text, color);
+    return [sizeKey, context.getImageData(0, 0, size, size)];
+  }));
+  return Object.fromEntries(entries);
+}
+
+function loadActionIconBitmap(size, path) {
+  if (!actionIconBitmapPromises.has(size)) {
+    actionIconBitmapPromises.set(size, (async () => {
+      const response = await fetch(chrome.runtime.getURL(path));
+      if (!response.ok) throw new Error(`Could not load action icon ${size}.`);
+      return createImageBitmap(await response.blob());
+    })());
+  }
+  return actionIconBitmapPromises.get(size);
+}
+
+function drawCapacityBadge(context, size, rawText, color) {
+  const text = String(rawText).slice(0, 3);
+  const badgeHeight = Math.round(size * 0.6);
+  const badgeTop = size - badgeHeight;
+  const radius = Math.max(2, Math.round(size * 0.16));
+  const fontScale = text.length >= 3 ? 0.38 : 0.5;
+
+  context.save();
+  context.beginPath();
+  roundedRectangle(context, 0, badgeTop, size, badgeHeight, radius);
+  context.fillStyle = color;
+  context.fill();
+  context.strokeStyle = "rgba(0, 0, 0, 0.42)";
+  context.lineWidth = Math.max(1, Math.round(size / 32));
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = `800 ${Math.max(7, Math.round(size * fontScale))}px Arial, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, size / 2, badgeTop + badgeHeight / 2 + size * 0.025);
+  context.restore();
+}
+
+function roundedRectangle(context, x, y, width, height, radius) {
+  const right = x + width;
+  const bottom = y + height;
+  context.moveTo(x + radius, y);
+  context.lineTo(right - radius, y);
+  context.quadraticCurveTo(right, y, right, y + radius);
+  context.lineTo(right, bottom - radius);
+  context.quadraticCurveTo(right, bottom, right - radius, bottom);
+  context.lineTo(x + radius, bottom);
+  context.quadraticCurveTo(x, bottom, x, bottom - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+}
+
+async function showCapacityNotification(event) {
+  if (!chrome.notifications || !chrome.notifications.create) return;
+  const copy = CodexCapacityMonitor.buildNotification(event);
+  await chrome.notifications.create(`codex-capacity-${event.key}-${event.type}`, {
+    type: "basic",
+    iconUrl: "icons/icon-128.png",
+    title: copy.title,
+    message: copy.message,
+    priority: event.type === "exhausted" ? 2 : 1,
+    requireInteraction: event.type === "exhausted",
+    silent: true
+  });
+}
+
+async function playCapacitySound(
+  expectedCapacityGeneration,
+  expectedAnalyticsRefreshGeneration = null
+) {
+  const ready = await ensureOffscreenDocument();
+  if (!ready
+    || expectedCapacityGeneration !== capacityGeneration
+    || !isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)) return;
+  await chrome.runtime.sendMessage({ type: "capacity:playSound" });
+}
+
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen || !chrome.offscreen.createDocument) return false;
+  const documentUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [documentUrl]
+    });
+    if (contexts.length) return true;
+  }
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Play a user-enabled sound once for a newly crossed capacity alert."
+    });
+  } catch (error) {
+    if (!/single offscreen document|already exists/i.test(String(error && error.message ? error.message : error))) {
+      throw error;
+    }
+  }
+  return true;
 }
 
 async function waitForTabReadyOrDelay(tabId) {
@@ -603,17 +1297,53 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withTimeout(promise, ms, message) {
+async function withTimeout(
+  promise,
+  ms,
+  message,
+  expectedRefreshGeneration = null
+) {
   let timeoutId = null;
+  let timedOut = false;
+  let invalidatedRefreshGeneration = null;
   try {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(message)), ms);
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(message));
+        }, ms);
       })
     ]);
   } catch (error) {
+    if (timedOut) {
+      if (Number.isInteger(expectedRefreshGeneration)
+        && expectedRefreshGeneration !== analyticsRefreshGeneration) {
+        const latest = await chrome.storage.local.get([storageKeys.state]);
+        return {
+          ok: false,
+          ignored: true,
+          state: latest[storageKeys.state] || {},
+          error: String(error && error.message ? error.message : error)
+        };
+      }
+      analyticsRefreshGeneration += 1;
+      invalidatedRefreshGeneration = analyticsRefreshGeneration;
+      analyticsRefreshPromise = null;
+      analyticsRefreshContext = null;
+      await expireCapacityMonitorState().catch(() => {});
+    }
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+    if (invalidatedRefreshGeneration !== null
+      && invalidatedRefreshGeneration !== analyticsRefreshGeneration) {
+      return {
+        ok: false,
+        ignored: true,
+        state: data[storageKeys.state] || {},
+        error: String(error && error.message ? error.message : error)
+      };
+    }
     const state = {
       ...(data[storageKeys.state] || {}),
       status: "refresh-timeout",
