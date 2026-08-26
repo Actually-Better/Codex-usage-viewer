@@ -329,6 +329,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = { popupRequeste
           : "The existing Codex Analytics page did not respond after loading."
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });
+    await expireCapacityMonitorState().catch(() => {});
     return { ok: false, state, error: String(error && error.message ? error.message : error) };
   } finally {
     try {
@@ -648,6 +649,8 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
   await chrome.storage.local.set({ [storageKeys.state]: state });
   if (pageSnapshot.loginStatus === "logged-out") {
     await clearCapacityMonitorState();
+  } else {
+    await expireCapacityMonitorState();
   }
   return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
 }
@@ -755,7 +758,7 @@ async function processCapacitySnapshotSerialized(snapshot, expectedCapacityGener
   }
   if (expectedCapacityGeneration === capacityGeneration
     && evaluation.events.some((event) => CodexCapacityMonitor.shouldPlaySound(event, evaluation.settings))) {
-    await playCapacitySound().catch(() => {});
+    await playCapacitySound(expectedCapacityGeneration).catch(() => {});
   }
   return evaluation;
 }
@@ -815,6 +818,38 @@ function clearCapacityMonitorState() {
   return result;
 }
 
+function expireCapacityMonitorState() {
+  const result = capacityUpdate.then(
+    () => expireCapacityMonitorStateSerialized(),
+    () => expireCapacityMonitorStateSerialized()
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function expireCapacityMonitorStateSerialized() {
+  if (capacitySuppressed) return { suppressed: true };
+  const data = await chrome.storage.local.get([
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
+  ]);
+  const previous = CodexCapacityMonitor.normalizeMonitorState(data[storageKeys.capacityState]);
+  const counters = Object.fromEntries(Object.entries(previous.counters)
+    .filter(([, observation]) => isFreshCapacityObservation(observation)));
+  const state = {
+    version: 2,
+    counters,
+    availableKeys: previous.availableKeys.filter((key) => counters[key]),
+    updatedAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ [storageKeys.capacityState]: state });
+  await clearExpiredExhaustedNotifications(previous);
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  const available = CodexCapacityMonitor.extractFreshStateCounters(state);
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
+  return state;
+}
+
 function markCapacitySuppressed() {
   if (capacitySuppressed) return false;
   capacitySuppressed = true;
@@ -869,9 +904,29 @@ function isFreshCapacityObservation(observation, now = Date.now()) {
     && now - lastSeenAt <= CodexCapacityMonitor.COUNTER_STALE_AFTER_MS;
 }
 
-async function clearCapacityNotification(counterKey, type) {
+function clearCapacityNotification(counterKey, type) {
   if (!chrome.notifications || !chrome.notifications.clear) return false;
-  return chrome.notifications.clear(`codex-capacity-${counterKey}-${type}`).catch(() => false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(value));
+    };
+    try {
+      const result = chrome.notifications.clear(
+        `codex-capacity-${counterKey}-${type}`,
+        finish
+      );
+      if (result && typeof result.then === "function") {
+        result.then(finish, () => finish(false));
+      } else if (result !== undefined) {
+        finish(result);
+      }
+    } catch (_) {
+      finish(false);
+    }
+  });
 }
 
 async function clearAllCapacityNotifications() {
@@ -998,9 +1053,9 @@ async function showCapacityNotification(event) {
   });
 }
 
-async function playCapacitySound() {
+async function playCapacitySound(expectedCapacityGeneration) {
   const ready = await ensureOffscreenDocument();
-  if (!ready) return;
+  if (!ready || expectedCapacityGeneration !== capacityGeneration) return;
   await chrome.runtime.sendMessage({ type: "capacity:playSound" });
 }
 

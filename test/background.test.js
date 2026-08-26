@@ -8,7 +8,7 @@ const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const { CodexCapacityMonitor } = require("../capacity-monitor.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false, blockCapacityInitialization = false } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false, blockCapacityInitialization = false, callbackOnlyNotificationClear = false } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
@@ -19,7 +19,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -43,14 +43,19 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         calls.notificationEvents.push({ type: "create", id });
         return id;
       },
-      async clear(id) {
+      clear(id, callback) {
         calls.clearedNotifications.push(id);
         calls.notificationEvents.push({ type: "clear", id });
-        return true;
+        if (callbackOnlyNotificationClear) {
+          queueMicrotask(() => callback(true));
+          return undefined;
+        }
+        return Promise.resolve(true);
       }
     },
     runtime: {
       getURL(path) { return `chrome-extension://test/${path}`; },
+      async sendMessage(message) { calls.soundMessages.push(message); },
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
       onStartup: { addListener(listener) { listeners.startup = listener; } },
       onMessage: { addListener(listener) { listeners.message = listener; } }
@@ -674,6 +679,35 @@ test("an expired missing counter clears its persistent exhausted notification", 
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"));
 });
 
+test("an incomplete refresh expires stale capacity without a worker restart", async () => {
+  const staleSeenAt = new Date(
+    Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1
+  ).toISOString();
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codex5h: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {}, staleSeenAt);
+  const harness = createBackgroundHarness({ capacityState: exhausted.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.clearedNotifications.length = 0;
+
+  await harness.run(`saveIncompleteRefresh(${JSON.stringify({
+    status: "ok",
+    loginStatus: "logged-in",
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: false,
+    usage: {}
+  })}, 7)`);
+
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codex5h,
+    undefined
+  );
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"));
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
 test("startup clears a persistent exhausted notification after its counter expires", async () => {
   const staleSeenAt = new Date(
     Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1
@@ -849,6 +883,39 @@ test("disabling notifications clears every capacity alert type", async () => {
   assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-reset"));
+});
+
+test("callback-only notification clearing completes every capacity ID", async () => {
+  const harness = createBackgroundHarness({ callbackOnlyNotificationClear: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.clearedNotifications.length = 0;
+
+  await harness.run("clearCapacityMonitorState()");
+
+  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
+});
+
+test("sign-out during offscreen setup suppresses the pending alert sound", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  let releaseOffscreenSetup;
+  let offscreenSetupStarted;
+  const offscreenSetupBlocked = new Promise((resolve) => { offscreenSetupStarted = resolve; });
+  const offscreenSetupReleased = new Promise((resolve) => { releaseOffscreenSetup = resolve; });
+  harness.context.blockingEnsureOffscreenDocument = async () => {
+    offscreenSetupStarted();
+    await offscreenSetupReleased;
+    return true;
+  };
+  harness.run("ensureOffscreenDocument = blockingEnsureOffscreenDocument");
+
+  const playing = harness.run("playCapacitySound(capacityGeneration)");
+  await offscreenSetupBlocked;
+  const clearing = harness.run("clearCapacityMonitorState()");
+  releaseOffscreenSetup();
+  await Promise.all([playing, clearing]);
+
+  assert.equal(harness.calls.soundMessages.length, 0);
 });
 
 test("startup normalization preserves settings changed after its first read", async () => {
