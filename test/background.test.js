@@ -19,7 +19,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -37,10 +37,12 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     notifications: {
       async create(id, options) {
         calls.notifications.push({ id, ...options });
+        calls.notificationEvents.push({ type: "create", id });
         return id;
       },
       async clear(id) {
         calls.clearedNotifications.push(id);
+        calls.notificationEvents.push({ type: "clear", id });
         return true;
       }
     },
@@ -334,6 +336,46 @@ test("sign-out wins over an accepted capacity update already in flight", async (
   assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
+test("sign-out wins over startup capacity initialization already in flight", async () => {
+  const cached = visibleSnapshot();
+  cached.usage.codexWeekly = {
+    value: "4% remaining",
+    structured: { remainingPercent: 4 }
+  };
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.storage[ChatGPTUsageConfig.storageKeys.state] = {
+    status: "usage-current",
+    snapshot: cached
+  };
+  harness.storage[ChatGPTUsageConfig.storageKeys.capacityState] = null;
+
+  const originalGet = harness.context.chrome.storage.local.get;
+  let releaseInitializationRead;
+  let initializationReadStarted;
+  const initializationReadBlocked = new Promise((resolve) => { initializationReadStarted = resolve; });
+  const initializationReadReleased = new Promise((resolve) => { releaseInitializationRead = resolve; });
+  let blockNextInitializationRead = true;
+  harness.context.chrome.storage.local.get = async (keys) => {
+    if (blockNextInitializationRead && keys.includes(ChatGPTUsageConfig.storageKeys.capacityState)) {
+      blockNextInitializationRead = false;
+      initializationReadStarted();
+      await initializationReadReleased;
+    }
+    return originalGet(keys);
+  };
+
+  const initializing = harness.run("initializeCapacityUi()");
+  await initializationReadBlocked;
+  const clearing = harness.run("clearCapacityMonitorState()");
+  releaseInitializationRead();
+  await Promise.all([initializing, clearing]);
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+  assert.equal(Object.keys(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters).length, 0);
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
 test("supported browsers render the percentage as a larger custom action icon badge", async () => {
   const harness = createBackgroundHarness({ enableCustomActionIcon: true });
   await new Promise((resolve) => setImmediate(resolve));
@@ -507,6 +549,53 @@ test("disabling notifications clears every capacity alert type", async () => {
   assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-reset"));
+});
+
+test("notification opt-out wins over a capacity alert already in flight", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notificationEvents.length = 0;
+
+  const originalSet = harness.context.chrome.storage.local.set;
+  let releaseCapacityWrite;
+  let capacityWriteStarted;
+  const capacityWriteBlocked = new Promise((resolve) => { capacityWriteStarted = resolve; });
+  const capacityWriteReleased = new Promise((resolve) => { releaseCapacityWrite = resolve; });
+  let blockNextCapacityWrite = true;
+  harness.context.chrome.storage.local.set = async (values) => {
+    if (blockNextCapacityWrite && values[ChatGPTUsageConfig.storageKeys.capacityState]) {
+      blockNextCapacityWrite = false;
+      capacityWriteStarted();
+      await capacityWriteReleased;
+    }
+    return originalSet(values);
+  };
+
+  const processing = harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: { value: "10% remaining", structured: { remainingPercent: 10 } }
+    }
+  })})`);
+  await capacityWriteBlocked;
+  harness.storage[ChatGPTUsageConfig.storageKeys.capacitySettings] = {
+    ...CodexCapacityMonitor.DEFAULT_SETTINGS,
+    enableNotifications: false
+  };
+  const disabling = harness.run(`handleCapacitySettingsChanged(${JSON.stringify({
+    enableNotifications: false
+  })})`);
+  releaseCapacityWrite();
+  await Promise.all([processing, disabling]);
+
+  const lowEvents = harness.calls.notificationEvents.filter((event) => (
+    event.id === "codex-capacity-codexWeekly-low"
+  ));
+  assert.deepEqual(lowEvents.map((event) => event.type), ["create", "clear"]);
 });
 
 function visibleSnapshot() {

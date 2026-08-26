@@ -602,23 +602,40 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
   return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
 }
 
-async function initializeCapacityUi() {
+function initializeCapacityUi() {
+  const expectedCapacityGeneration = capacityGeneration;
+  const result = capacityUpdate.then(
+    () => initializeCapacityUiSerialized(expectedCapacityGeneration),
+    () => initializeCapacityUiSerialized(expectedCapacityGeneration)
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
   const data = await chrome.storage.local.get([
     storageKeys.state,
     storageKeys.capacitySettings,
     storageKeys.capacityState
   ]);
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed during initialization." };
+  }
   const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
   if (JSON.stringify(data[storageKeys.capacitySettings]) !== JSON.stringify(settings)) {
     await chrome.storage.local.set({ [storageKeys.capacitySettings]: settings });
+  }
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed while initializing settings." };
   }
   const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
   const usageState = data[storageKeys.state];
   const rawMonitorState = data[storageKeys.capacityState];
   let available;
   if (isSignedOutUsageState(usageState)) {
-    await clearCapacityMonitorState();
-    return;
+    capacityGeneration += 1;
+    await clearCapacityMonitorStateSerialized();
+    return { suppressed: true };
   } else if (rawMonitorState === undefined || rawMonitorState === null) {
     const baseline = CodexCapacityMonitor.evaluateSnapshot(snapshot, null, settings);
     await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
@@ -685,7 +702,16 @@ async function applyCapacityVisualFromStoredSnapshot(rawSettings) {
   await applyCapacityVisual(visual);
 }
 
-async function handleCapacitySettingsChanged(rawSettings) {
+function handleCapacitySettingsChanged(rawSettings) {
+  const result = capacityUpdate.then(
+    () => handleCapacitySettingsChangedSerialized(rawSettings),
+    () => handleCapacitySettingsChangedSerialized(rawSettings)
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function handleCapacitySettingsChangedSerialized(rawSettings) {
   const settings = CodexCapacityMonitor.normalizeSettings(rawSettings);
   if (!settings.enableNotifications) {
     await clearAllCapacityNotifications();
