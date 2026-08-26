@@ -19,6 +19,7 @@ let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
 let retainedSignInTabUpdate = Promise.resolve();
 let capacityUpdate = Promise.resolve();
+let capacityInitializationPromise = Promise.resolve();
 let capacityGeneration = 0;
 const actionIconBitmapPromises = new Map();
 const adoptedAnalyticsTabIds = new Set();
@@ -105,7 +106,13 @@ async function recordLocalMessage(payload) {
   return { ok: true };
 }
 
-async function saveSnapshot(snapshot, tab, source, expectedCapacityGeneration = capacityGeneration) {
+async function saveSnapshot(
+  snapshot,
+  tab,
+  source,
+  expectedCapacityGeneration = capacityGeneration,
+  capacitySnapshot = snapshot
+) {
   const existing = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
   const currentState = existing[storageKeys.state] || {};
   const counters = ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters]);
@@ -128,7 +135,7 @@ async function saveSnapshot(snapshot, tab, source, expectedCapacityGeneration = 
     [storageKeys.counters]: counters
   });
   if (hasVisibleUsage && (source === "requested-stable" || source === "requested-best-effort")) {
-    await processCapacitySnapshot(nextState.snapshot, expectedCapacityGeneration).catch(() => {});
+    await processCapacitySnapshot(capacitySnapshot, expectedCapacityGeneration).catch(() => {});
   }
   return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
@@ -509,6 +516,7 @@ async function markRefreshStarted(reason) {
 }
 
 async function requestSnapshotWithRetry(tabId) {
+  await capacityInitializationPromise;
   let expectedCapacityGeneration = capacityGeneration;
   let observedLogout = false;
   let lastError = null;
@@ -517,6 +525,7 @@ async function requestSnapshotWithRetry(tabId) {
   let lastUsageSignature = null;
   let stableUsageReads = 0;
   let firstVisibleAttempt = null;
+  const stableCapacityCounters = new Map();
 
   for (let attempt = 0; attempt < ANALYTICS_READ_ATTEMPTS; attempt += 1) {
     try {
@@ -534,8 +543,10 @@ async function requestSnapshotWithRetry(tabId) {
           lastUsageSignature = null;
           stableUsageReads = 0;
           firstVisibleAttempt = null;
+          stableCapacityCounters.clear();
           continue;
         }
+        updateStableCapacityCounters(snapshot, stableCapacityCounters);
         if (snapshot.codexAnalytics && ChatGPTUsageModel.hasVisibleUsage(snapshot)) {
           accumulatedSnapshot = mergeUsageSnapshot(accumulatedSnapshot, snapshot);
           const signature = JSON.stringify(accumulatedSnapshot.usage || {});
@@ -550,7 +561,8 @@ async function requestSnapshotWithRetry(tabId) {
               accumulatedSnapshot,
               { id: tabId },
               "requested-stable",
-              expectedCapacityGeneration
+              expectedCapacityGeneration,
+              buildStableCapacitySnapshot(accumulatedSnapshot, stableCapacityCounters)
             );
           }
         }
@@ -564,7 +576,8 @@ async function requestSnapshotWithRetry(tabId) {
       accumulatedSnapshot,
       { id: tabId },
       "requested-best-effort",
-      expectedCapacityGeneration
+      expectedCapacityGeneration,
+      buildStableCapacitySnapshot(accumulatedSnapshot, stableCapacityCounters)
     );
   }
   if (lastSnapshot) return saveIncompleteRefresh(lastSnapshot, tabId);
@@ -580,6 +593,36 @@ function mergeUsageSnapshot(accumulated, incoming) {
   return {
     ...(accumulated || {}),
     ...incoming,
+    usage,
+    domUsageVisible: Object.values(usage).some((field) => field && field.value)
+  };
+}
+
+function updateStableCapacityCounters(snapshot, observations) {
+  const available = new Map(CodexCapacityMonitor.extractAvailableCounters(snapshot)
+    .map((counter) => [counter.key, counter]));
+  for (const definition of CodexCapacityMonitor.COUNTERS) {
+    const counter = available.get(definition.key);
+    if (!counter) {
+      observations.delete(definition.key);
+      continue;
+    }
+    const signature = JSON.stringify([counter.remainingPercent, counter.resetText]);
+    const previous = observations.get(definition.key);
+    observations.set(definition.key, {
+      count: previous && previous.signature === signature ? previous.count + 1 : 1,
+      field: snapshot.usage[definition.key],
+      signature
+    });
+  }
+}
+
+function buildStableCapacitySnapshot(snapshot, observations) {
+  const usage = Object.fromEntries([...observations.entries()]
+    .filter(([, observation]) => observation.count >= ANALYTICS_STABLE_READS_REQUIRED)
+    .map(([key, observation]) => [key, observation.field]));
+  return {
+    ...snapshot,
     usage,
     domUsageVisible: Object.values(usage).some((field) => field && field.value)
   };
@@ -614,7 +657,8 @@ function initializeCapacityUi() {
     () => initializeCapacityUiSerialized(expectedCapacityGeneration),
     () => initializeCapacityUiSerialized(expectedCapacityGeneration)
   );
-  capacityUpdate = result.catch(() => {});
+  capacityInitializationPromise = result.catch(() => {});
+  capacityUpdate = capacityInitializationPromise;
   return result;
 }
 

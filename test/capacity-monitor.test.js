@@ -97,11 +97,28 @@ test("stale observations rebaseline instead of creating cross-account alerts", (
     snapshot({ codexWeekly: 5 }),
     initial.state,
     {},
-    "2026-08-26T08:31:00.000Z"
+    "2026-08-26T08:36:00.000Z"
   );
 
   assert.equal(result.events.length, 0);
   assert.equal(result.state.counters.codexWeekly.remainingPercent, 5);
+});
+
+test("one missed 15-minute refresh still allows a threshold crossing", () => {
+  const initial = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot({ codexWeekly: 11 }),
+    null,
+    {},
+    "2026-08-26T08:00:00.000Z"
+  );
+  const result = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot({ codexWeekly: 10 }),
+    initial.state,
+    {},
+    "2026-08-26T08:30:30.000Z"
+  );
+
+  assert.equal(result.events[0].type, "low");
 });
 
 test("a 5-hour counter can appear later without a false first alert", () => {

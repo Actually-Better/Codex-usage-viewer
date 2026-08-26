@@ -8,7 +8,7 @@ const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const { CodexCapacityMonitor } = require("../capacity-monitor.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false, blockCapacityInitialization = false } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
@@ -26,6 +26,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const tabRemovedListeners = new Set();
   let alarmExists = existingAlarm;
   let openTabs = tabs.map((tab) => ({ ...tab }));
+  let releaseInitialCapacityRead;
+  const initialCapacityReadReleased = new Promise((resolve) => { releaseInitialCapacityRead = resolve; });
+  let shouldBlockInitialCapacityRead = blockCapacityInitialization;
   const chrome = {
     action: {
       async setBadgeText(options) { calls.badgeText.push(options); },
@@ -64,6 +67,11 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     storage: {
       local: {
         async get(keys) {
+          if (shouldBlockInitialCapacityRead
+            && keys.includes(ChatGPTUsageConfig.storageKeys.capacityState)) {
+            shouldBlockInitialCapacityRead = false;
+            await initialCapacityReadReleased;
+          }
           return Object.fromEntries(keys.map((key) => [key, storage[key]]));
         },
         async set(values) {
@@ -209,6 +217,9 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         tab.url = url;
         for (const listener of tabUpdatedListeners) listener(tabId, { url }, { ...tab });
       }
+    },
+    releaseCapacityInitialization() {
+      releaseInitialCapacityRead();
     },
     run(expression) {
       return vm.runInContext(expression, context);
@@ -500,6 +511,35 @@ test("startup never seeds capacity from a signed-out cached snapshot", async () 
   assert.equal(harness.calls.notifications.length, 0);
 });
 
+test("an authenticated refresh waits for signed-out startup suppression", async () => {
+  const harness = createBackgroundHarness({
+    blockCapacityInitialization: true,
+    initialState: {
+      status: "sign-in-required",
+      snapshot: {
+        status: "ok",
+        loginStatus: "logged-out",
+        codexAnalytics: { pageDetected: true },
+        domUsageVisible: false,
+        usage: {}
+      }
+    },
+    snapshot: visibleSnapshot()
+  });
+
+  const refreshing = harness.run("refreshForPopup()");
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.releaseCapacityInitialization();
+  const result = await refreshing;
+
+  assert.equal(result.state.status, "usage-current");
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, undefined);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codex5h.remainingPercent,
+    60
+  );
+});
+
 test("content snapshots never emit alerts before the accepted stable read", async () => {
   const baseline = CodexCapacityMonitor.evaluateSnapshot({
     usage: {
@@ -536,6 +576,49 @@ test("content snapshots never emit alerts before the accepted stable read", asyn
     harness.calls.notifications.map((notification) => notification.id),
     ["codex-capacity-codexWeekly-critical"]
   );
+});
+
+test("a transient optional counter stays in popup data but cannot alert", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "50% remaining", structured: { remainingPercent: 50 } },
+      codex5h: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({
+    capacityState: baseline.state,
+    snapshot(callNumber) {
+      return {
+        status: "ok",
+        loginStatus: "logged-in",
+        codexAnalytics: { pageDetected: true },
+        domUsageVisible: true,
+        usage: {
+          codexWeekly: {
+            value: "50% remaining",
+            structured: { remainingPercent: 50 }
+          },
+          ...(callNumber === 1 ? {
+            codex5h: {
+              value: "5% remaining",
+              structured: { remainingPercent: 5 }
+            }
+          } : {})
+        }
+      };
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const result = await harness.run("requestSnapshotWithRetry(7)");
+
+  assert.equal(result.state.snapshot.usage.codex5h.structured.remainingPercent, 5);
+  assert.deepEqual(
+    Array.from(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].availableKeys),
+    ["codexWeekly"]
+  );
+  assert.equal(harness.calls.notifications.length, 0);
 });
 
 test("explicit sign-out suppresses cached capacity and clears exhausted notifications", async () => {

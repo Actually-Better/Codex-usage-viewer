@@ -10,7 +10,7 @@
     enableSounds: false
   });
   const PREVENTIVE_THRESHOLD = 25;
-  const COUNTER_STALE_AFTER_MS = 30 * 60 * 1000;
+  const COUNTER_STALE_AFTER_MS = 35 * 60 * 1000;
   const COUNTERS = Object.freeze([
     { key: "codexWeekly", label: "Weekly usage" },
     { key: "codex5h", label: "5-hour usage" },
