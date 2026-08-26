@@ -206,7 +206,7 @@ async function refreshForPopup() {
 }
 
 function refreshWithTimeout(reason) {
-  const refreshPromise = refreshOnce(reason);
+  const refreshPromise = refreshOnce(reason, true);
   const expectedRefreshGeneration = analyticsRefreshContext
     && analyticsRefreshContext.generation;
   return withTimeout(
@@ -232,7 +232,7 @@ async function openCodexAnalyticsPage() {
   return { ok: true, tabId: tab.id, reused: false };
 }
 
-async function refreshOnce(reason) {
+async function refreshOnce(reason, boundRetry = false) {
   if (!analyticsRefreshPromise) {
     analyticsRefreshGeneration += 1;
     analyticsRefreshContext = {
@@ -253,7 +253,9 @@ async function refreshOnce(reason) {
       const joinedGeneration = analyticsRefreshContext.generation;
       return analyticsRefreshPromise.then(() => (
         joinedGeneration === analyticsRefreshGeneration
-          ? refreshOnce("popup")
+          ? boundRetry
+            ? refreshWithTimeout("popup")
+            : refreshOnce("popup")
           : { ok: false, ignored: true, reason: "Analytics refresh expired before retry." }
       ));
     }

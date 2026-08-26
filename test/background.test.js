@@ -261,6 +261,35 @@ test("scheduled checks use the same bounded refresh wrapper as the popup", async
   assert.deepEqual(Array.from(harness.context.boundedRefreshReasons), ["alarm"]);
 });
 
+test("a queued popup retry starts its own bounded refresh", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  let releaseCurrentRefresh;
+  harness.context.currentRefresh = new Promise((resolve) => {
+    releaseCurrentRefresh = resolve;
+  });
+  harness.context.boundedRetryReasons = [];
+  harness.context.fakeRefreshWithTimeout = async (reason) => {
+    harness.context.boundedRetryReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run(`analyticsRefreshGeneration = 41;
+    analyticsRefreshPromise = currentRefresh;
+    analyticsRefreshContext = {
+      popupRequested: false,
+      acceptingPopupJoin: false,
+      generation: analyticsRefreshGeneration
+    };
+    refreshWithTimeout = fakeRefreshWithTimeout;`);
+
+  const queued = harness.run("refreshOnce('popup', true)");
+  releaseCurrentRefresh();
+  const result = await queued;
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(harness.context.boundedRetryReasons), ["popup"]);
+});
+
 test("capacity alerts persist crossings and never repeat the same alert", async () => {
   const harness = createBackgroundHarness();
   await new Promise((resolve) => setImmediate(resolve));
