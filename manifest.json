@@ -11,6 +11,8 @@
   },
   "permissions": [
     "alarms",
+    "notifications",
+    "offscreen",
     "storage"
   ],
   "host_permissions": [

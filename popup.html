@@ -260,6 +260,10 @@
         background: var(--surface-emphasis);
       }
 
+      .primary-limits > .metric-card:only-child {
+        grid-column: 1 / -1;
+      }
+
       .metric-card {
         min-width: 0;
       }
@@ -339,6 +343,7 @@
       }
 
       .inline-disclosure,
+      .settings,
       .diagnostics {
         border: 0;
         border-bottom: 1px solid var(--border);
@@ -346,6 +351,7 @@
       }
 
       .inline-disclosure > summary,
+      .settings > summary,
       .diagnostics > summary {
         color: var(--muted);
         cursor: pointer;
@@ -353,6 +359,59 @@
         font-weight: 650;
         list-style-position: inside;
         padding: 12px 0;
+      }
+
+      .settings-list {
+        display: grid;
+        gap: 9px;
+        padding: 2px 0 12px;
+      }
+
+      .setting-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .setting-row input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+        accent-color: var(--accent-strong);
+      }
+
+      .threshold-settings {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        padding-top: 3px;
+      }
+
+      .threshold-setting {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .threshold-setting input {
+        width: 100%;
+        min-height: 30px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--text);
+        padding: 4px 7px;
+        font: inherit;
+      }
+
+      .settings-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 10px;
       }
 
       .other-limits-list {
@@ -518,6 +577,39 @@
         </div>
       </section>
 
+      <details id="capacitySettings" class="settings">
+        <summary>Settings</summary>
+        <div class="settings-list">
+          <label class="setting-row" for="enableNotifications">
+            <span>Enable notifications</span>
+            <input id="enableNotifications" type="checkbox">
+          </label>
+          <label class="setting-row" for="notifyOnReset">
+            <span>Notify on reset to 100%</span>
+            <input id="notifyOnReset" type="checkbox">
+          </label>
+          <label class="setting-row" for="showRemainingPercentage">
+            <span>Show remaining percentage on icon</span>
+            <input id="showRemainingPercentage" type="checkbox">
+          </label>
+          <div class="threshold-settings">
+            <label class="threshold-setting" for="lowThreshold">
+              <span>Low warning threshold</span>
+              <input id="lowThreshold" type="number" min="1" max="25" step="1" inputmode="numeric">
+            </label>
+            <label class="threshold-setting" for="criticalThreshold">
+              <span>Critical usage threshold</span>
+              <input id="criticalThreshold" type="number" min="1" max="25" step="1" inputmode="numeric">
+            </label>
+          </div>
+          <label class="setting-row" for="enableSounds">
+            <span>Enable sounds</span>
+            <input id="enableSounds" type="checkbox">
+          </label>
+          <p id="settingsStatus" class="settings-note" aria-live="polite"></p>
+        </div>
+      </details>
+
       <details class="diagnostics">
         <summary>Diagnostics</summary>
         <dl id="diagnosticsSection"></dl>
@@ -531,6 +623,7 @@
     </div>
 
     <script src="usage-model.js"></script>
+    <script src="capacity-monitor.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

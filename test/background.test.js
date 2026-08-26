@@ -5,18 +5,21 @@ const { test } = require("node:test");
 const vm = require("node:vm");
 
 const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
+const { CodexCapacityMonitor } = require("../capacity-monitor.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
-    [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: localRetainedSignInTabId
+    [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: localRetainedSignInTabId,
+    [ChatGPTUsageConfig.storageKeys.capacitySettings]: capacitySettings,
+    [ChatGPTUsageConfig.storageKeys.capacityState]: capacityState
   };
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -24,7 +27,21 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   let alarmExists = existingAlarm;
   let openTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
+    action: {
+      async setBadgeText(options) { calls.badgeText.push(options); },
+      async setBadgeBackgroundColor(options) { calls.badgeColor.push(options); },
+      async setBadgeTextColor(options) { calls.badgeTextColor.push(options); },
+      async setIcon(options) { calls.actionIcon.push(options); },
+      async setTitle(options) { calls.actionTitle.push(options); }
+    },
+    notifications: {
+      async create(id, options) {
+        calls.notifications.push({ id, ...options });
+        return id;
+      }
+    },
     runtime: {
+      getURL(path) { return `chrome-extension://test/${path}`; },
       onInstalled: { addListener(listener) { listeners.installed = listener; } },
       onStartup: { addListener(listener) { listeners.startup = listener; } },
       onMessage: { addListener(listener) { listeners.message = listener; } }
@@ -126,9 +143,31 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       }
     }
   };
-  const context = vm.createContext({
+  class FakeCanvasContext {
+    drawImage() {}
+    save() {}
+    beginPath() {}
+    moveTo() {}
+    lineTo() {}
+    quadraticCurveTo() {}
+    closePath() {}
+    fill() {}
+    stroke() {}
+    fillText() {}
+    restore() {}
+    getImageData(x, y, width, height) { return { x, y, width, height }; }
+  }
+  class FakeOffscreenCanvas {
+    constructor(width, height) {
+      this.width = width;
+      this.height = height;
+    }
+    getContext() { return new FakeCanvasContext(); }
+  }
+  const contextGlobals = {
     ChatGPTUsageConfig,
     ChatGPTUsageModel,
+    CodexCapacityMonitor,
     URL,
     chrome,
     clearTimeout,
@@ -138,7 +177,13 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       queueMicrotask(callback);
       return 1;
     }
-  });
+  };
+  if (enableCustomActionIcon) {
+    contextGlobals.OffscreenCanvas = FakeOffscreenCanvas;
+    contextGlobals.createImageBitmap = async () => ({});
+    contextGlobals.fetch = async () => ({ ok: true, async blob() { return {}; } });
+  }
+  const context = vm.createContext(contextGlobals);
   vm.runInContext(backgroundSource, context);
   return {
     calls,
@@ -176,6 +221,92 @@ test("background worker startup repairs a missing periodic alarm", async () => {
     delayInMinutes: 1,
     periodInMinutes: 15
   }]);
+});
+
+test("capacity alerts persist crossings and never repeat the same alert", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+  harness.calls.badgeText.length = 0;
+
+  const processWeekly = (remainingPercent) => harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: `${remainingPercent}% remaining`,
+        structured: { remainingPercent, resetText: "Aug 31, 2026 14:00" }
+      }
+    }
+  })})`);
+
+  await processWeekly(11);
+  assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(harness.calls.badgeText.at(-1).text, "11");
+
+  await processWeekly(10);
+  assert.equal(harness.calls.notifications.length, 1);
+  assert.match(harness.calls.notifications[0].id, /codexWeekly-low/);
+
+  await processWeekly(10);
+  await processWeekly(9);
+  assert.equal(harness.calls.notifications.length, 1);
+
+  await processWeekly(5);
+  await processWeekly(0);
+  await processWeekly(100);
+  await processWeekly(100);
+  assert.deepEqual(harness.calls.notifications.map((notification) => notification.id), [
+    "codex-capacity-codexWeekly-low",
+    "codex-capacity-codexWeekly-critical",
+    "codex-capacity-codexWeekly-exhausted",
+    "codex-capacity-codexWeekly-reset"
+  ]);
+
+  await processWeekly(10);
+  assert.equal(harness.calls.notifications.length, 5);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent, 10);
+});
+
+test("concurrent snapshots serialize one threshold notification", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+  const snapshotAt = (remainingPercent) => JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: `${remainingPercent}% remaining`,
+        structured: { remainingPercent }
+      }
+    }
+  });
+
+  await harness.run(`processCapacitySnapshot(${snapshotAt(11)})`);
+  await Promise.all([
+    harness.run(`processCapacitySnapshot(${snapshotAt(10)})`),
+    harness.run(`processCapacitySnapshot(${snapshotAt(10)})`)
+  ]);
+
+  assert.equal(harness.calls.notifications.length, 1);
+  assert.equal(harness.calls.notifications[0].id, "codex-capacity-codexWeekly-low");
+});
+
+test("supported browsers render the percentage as a larger custom action icon badge", async () => {
+  const harness = createBackgroundHarness({ enableCustomActionIcon: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.badgeText.length = 0;
+  harness.calls.actionIcon.length = 0;
+
+  await harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: "42% remaining",
+        structured: { remainingPercent: 42 }
+      }
+    }
+  })})`);
+
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+  assert.deepEqual(Object.keys(harness.calls.actionIcon.at(-1).imageData), ["16", "32", "48"]);
+  assert.match(harness.calls.actionTitle.at(-1).title, /42% remaining$/);
 });
 
 function visibleSnapshot() {

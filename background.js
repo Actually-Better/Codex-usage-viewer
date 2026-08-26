@@ -1,4 +1,4 @@
-importScripts("usage-model.js");
+importScripts("usage-model.js", "capacity-monitor.js");
 
 const { storageKeys, refreshAlarmName, refreshPeriodMinutes } = ChatGPTUsageConfig;
 const CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics";
@@ -8,9 +8,17 @@ const ANALYTICS_READ_INTERVAL_MS = 400;
 const ANALYTICS_STABLE_READS_REQUIRED = 5;
 const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
+const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+const ACTION_ICON_PATHS = Object.freeze({
+  16: "icons/icon-16.png",
+  32: "icons/icon-32.png",
+  48: "icons/icon-48.png"
+});
 let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
 let retainedSignInTabUpdate = Promise.resolve();
+let capacityUpdate = Promise.resolve();
+const actionIconBitmapPromises = new Map();
 const adoptedAnalyticsTabIds = new Set();
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -21,10 +29,12 @@ chrome.runtime.onInstalled.addListener(async () => {
       ? ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters])
       : ChatGPTUsageModel.defaultCounters()
   });
+  await initializeCapacityUi();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureRefreshAlarm().catch(() => {});
+  initializeCapacityUi().catch(() => {});
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -46,6 +56,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 ensureRefreshAlarm().catch(() => {});
+initializeCapacityUi().catch(() => {});
+
+if (chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !changes[storageKeys.capacitySettings]) return;
+    applyCapacityVisualFromStoredSnapshot(changes[storageKeys.capacitySettings].newValue).catch(() => {});
+  });
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
@@ -107,6 +125,9 @@ async function saveSnapshot(snapshot, tab, source) {
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
+  if (hasVisibleUsage) {
+    await processCapacitySnapshot(nextState.snapshot).catch(() => {});
+  }
   return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
 
@@ -551,6 +572,213 @@ async function saveIncompleteRefresh(pageSnapshot, tabId, source = "requested-no
   };
   await chrome.storage.local.set({ [storageKeys.state]: state });
   return { ok: true, fresh: false, state, pageLoginStatus: pageSnapshot.loginStatus };
+}
+
+async function initializeCapacityUi() {
+  const data = await chrome.storage.local.get([
+    storageKeys.state,
+    storageKeys.capacitySettings
+  ]);
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
+  if (JSON.stringify(data[storageKeys.capacitySettings]) !== JSON.stringify(settings)) {
+    await chrome.storage.local.set({ [storageKeys.capacitySettings]: settings });
+  }
+  const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
+  const available = CodexCapacityMonitor.extractAvailableCounters(snapshot);
+  await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
+}
+
+function processCapacitySnapshot(snapshot) {
+  const result = capacityUpdate.then(
+    () => processCapacitySnapshotSerialized(snapshot),
+    () => processCapacitySnapshotSerialized(snapshot)
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function processCapacitySnapshotSerialized(snapshot) {
+  const data = await chrome.storage.local.get([
+    storageKeys.capacitySettings,
+    storageKeys.capacityState
+  ]);
+  const evaluation = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot,
+    data[storageKeys.capacityState],
+    data[storageKeys.capacitySettings]
+  );
+  const storageUpdate = { [storageKeys.capacityState]: evaluation.state };
+  if (JSON.stringify(data[storageKeys.capacitySettings]) !== JSON.stringify(evaluation.settings)) {
+    storageUpdate[storageKeys.capacitySettings] = evaluation.settings;
+  }
+  await chrome.storage.local.set(storageUpdate);
+  await applyCapacityVisual(evaluation.visual);
+
+  for (const event of evaluation.events) {
+    if (CodexCapacityMonitor.shouldNotify(event, evaluation.settings)) {
+      await showCapacityNotification(event).catch(() => {});
+    }
+  }
+  if (evaluation.events.some((event) => CodexCapacityMonitor.shouldPlaySound(event, evaluation.settings))) {
+    await playCapacitySound().catch(() => {});
+  }
+  return evaluation;
+}
+
+async function applyCapacityVisualFromStoredSnapshot(rawSettings) {
+  const data = await chrome.storage.local.get([storageKeys.state]);
+  const snapshot = data[storageKeys.state] && data[storageKeys.state].snapshot;
+  const available = CodexCapacityMonitor.extractAvailableCounters(snapshot);
+  const visual = CodexCapacityMonitor.deriveVisualState(available, rawSettings);
+  await applyCapacityVisual(visual);
+}
+
+async function applyCapacityVisual(visual) {
+  if (!chrome.action) return;
+  let usesCustomIcon = false;
+  if (visual.badgeText && chrome.action.setIcon) {
+    const imageData = await buildCapacityActionIcon(visual.badgeText, visual.badgeColor).catch(() => null);
+    if (imageData) {
+      try {
+        await chrome.action.setIcon({ imageData });
+        usesCustomIcon = true;
+      } catch (_) {
+        usesCustomIcon = false;
+      }
+    }
+  }
+  if (!usesCustomIcon && chrome.action.setIcon) {
+    await chrome.action.setIcon({ path: ACTION_ICON_PATHS }).catch(() => {});
+  }
+
+  const updates = [];
+  if (chrome.action.setBadgeText) {
+    updates.push(chrome.action.setBadgeText({ text: usesCustomIcon ? "" : visual.badgeText }));
+  }
+  if (chrome.action.setBadgeBackgroundColor) {
+    updates.push(chrome.action.setBadgeBackgroundColor({ color: visual.badgeColor }));
+  }
+  if (!usesCustomIcon && chrome.action.setBadgeTextColor) {
+    updates.push(chrome.action.setBadgeTextColor({ color: "#ffffff" }));
+  }
+  if (chrome.action.setTitle) {
+    updates.push(chrome.action.setTitle({ title: visual.title }));
+  }
+  await Promise.all(updates);
+}
+
+async function buildCapacityActionIcon(text, color) {
+  if (
+    typeof OffscreenCanvas !== "function"
+    || typeof createImageBitmap !== "function"
+    || typeof fetch !== "function"
+  ) {
+    return null;
+  }
+
+  const entries = await Promise.all(Object.entries(ACTION_ICON_PATHS).map(async ([sizeKey, path]) => {
+    const size = Number(sizeKey);
+    const canvas = new OffscreenCanvas(size, size);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("2D canvas is unavailable.");
+    context.drawImage(await loadActionIconBitmap(size, path), 0, 0, size, size);
+    drawCapacityBadge(context, size, text, color);
+    return [sizeKey, context.getImageData(0, 0, size, size)];
+  }));
+  return Object.fromEntries(entries);
+}
+
+function loadActionIconBitmap(size, path) {
+  if (!actionIconBitmapPromises.has(size)) {
+    actionIconBitmapPromises.set(size, (async () => {
+      const response = await fetch(chrome.runtime.getURL(path));
+      if (!response.ok) throw new Error(`Could not load action icon ${size}.`);
+      return createImageBitmap(await response.blob());
+    })());
+  }
+  return actionIconBitmapPromises.get(size);
+}
+
+function drawCapacityBadge(context, size, rawText, color) {
+  const text = String(rawText).slice(0, 3);
+  const badgeHeight = Math.round(size * 0.6);
+  const badgeTop = size - badgeHeight;
+  const radius = Math.max(2, Math.round(size * 0.16));
+  const fontScale = text.length >= 3 ? 0.38 : 0.5;
+
+  context.save();
+  context.beginPath();
+  roundedRectangle(context, 0, badgeTop, size, badgeHeight, radius);
+  context.fillStyle = color;
+  context.fill();
+  context.strokeStyle = "rgba(0, 0, 0, 0.42)";
+  context.lineWidth = Math.max(1, Math.round(size / 32));
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = `800 ${Math.max(7, Math.round(size * fontScale))}px Arial, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, size / 2, badgeTop + badgeHeight / 2 + size * 0.025);
+  context.restore();
+}
+
+function roundedRectangle(context, x, y, width, height, radius) {
+  const right = x + width;
+  const bottom = y + height;
+  context.moveTo(x + radius, y);
+  context.lineTo(right - radius, y);
+  context.quadraticCurveTo(right, y, right, y + radius);
+  context.lineTo(right, bottom - radius);
+  context.quadraticCurveTo(right, bottom, right - radius, bottom);
+  context.lineTo(x + radius, bottom);
+  context.quadraticCurveTo(x, bottom, x, bottom - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+}
+
+async function showCapacityNotification(event) {
+  if (!chrome.notifications || !chrome.notifications.create) return;
+  const copy = CodexCapacityMonitor.buildNotification(event);
+  await chrome.notifications.create(`codex-capacity-${event.key}-${event.type}`, {
+    type: "basic",
+    iconUrl: "icons/icon-128.png",
+    title: copy.title,
+    message: copy.message,
+    priority: event.type === "exhausted" ? 2 : 1,
+    requireInteraction: event.type === "exhausted",
+    silent: true
+  });
+}
+
+async function playCapacitySound() {
+  const ready = await ensureOffscreenDocument();
+  if (!ready) return;
+  await chrome.runtime.sendMessage({ type: "capacity:playSound" });
+}
+
+async function ensureOffscreenDocument() {
+  if (!chrome.offscreen || !chrome.offscreen.createDocument) return false;
+  const documentUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [documentUrl]
+    });
+    if (contexts.length) return true;
+  }
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Play a user-enabled sound once for a newly crossed capacity alert."
+    });
+  } catch (error) {
+    if (!/single offscreen document|already exists/i.test(String(error && error.message ? error.message : error))) {
+      throw error;
+    }
+  }
+  return true;
 }
 
 async function waitForTabReadyOrDelay(tabId) {

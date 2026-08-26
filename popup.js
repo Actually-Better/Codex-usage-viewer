@@ -8,29 +8,81 @@
   const statusDetail = document.getElementById("statusDetail");
   const statusAge = document.getElementById("statusAge");
   const warningBox = document.getElementById("warningBox");
+  const settingsStatus = document.getElementById("settingsStatus");
+  const capacitySettingInputs = {
+    enableNotifications: document.getElementById("enableNotifications"),
+    notifyOnReset: document.getElementById("notifyOnReset"),
+    showRemainingPercentage: document.getElementById("showRemainingPercentage"),
+    lowThreshold: document.getElementById("lowThreshold"),
+    criticalThreshold: document.getElementById("criticalThreshold"),
+    enableSounds: document.getElementById("enableSounds")
+  };
   let latestDiagnostics = null;
   let latestRefreshTimestamp = null;
 
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
   copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
+  for (const input of Object.values(capacitySettingInputs)) {
+    input.addEventListener("change", () => {
+      saveCapacitySettings().catch(() => {
+        settingsStatus.textContent = "Could not save settings. Reload the extension and try again.";
+      });
+    });
+  }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const stateChange = changes[ChatGPTUsageConfig.storageKeys.state];
     if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
+    const settingsChange = changes[ChatGPTUsageConfig.storageKeys.capacitySettings];
+    if (settingsChange) applyCapacitySettings(settingsChange.newValue);
   });
   initializePopup();
   setInterval(updateRefreshAge, 30000);
 
   async function initializePopup() {
     renderLoading();
-    await loadCachedState();
+    await Promise.all([loadCapacitySettings(), loadCachedState()]);
   }
 
   async function loadCachedState() {
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
     renderState(response && response.state);
+  }
+
+  async function loadCapacitySettings() {
+    const key = ChatGPTUsageConfig.storageKeys.capacitySettings;
+    const stored = await chrome.storage.local.get([key]);
+    applyCapacitySettings(stored[key]);
+  }
+
+  function applyCapacitySettings(rawSettings) {
+    const settings = CodexCapacityMonitor.normalizeSettings(rawSettings);
+    capacitySettingInputs.enableNotifications.checked = settings.enableNotifications;
+    capacitySettingInputs.notifyOnReset.checked = settings.notifyOnReset;
+    capacitySettingInputs.showRemainingPercentage.checked = settings.showRemainingPercentage;
+    capacitySettingInputs.lowThreshold.value = String(settings.lowThreshold);
+    capacitySettingInputs.criticalThreshold.max = String(settings.lowThreshold);
+    capacitySettingInputs.criticalThreshold.value = String(settings.criticalThreshold);
+    capacitySettingInputs.enableSounds.checked = settings.enableSounds;
+  }
+
+  async function saveCapacitySettings() {
+    const settings = CodexCapacityMonitor.normalizeSettings({
+      enableNotifications: capacitySettingInputs.enableNotifications.checked,
+      notifyOnReset: capacitySettingInputs.notifyOnReset.checked,
+      showRemainingPercentage: capacitySettingInputs.showRemainingPercentage.checked,
+      lowThreshold: capacitySettingInputs.lowThreshold.value,
+      criticalThreshold: capacitySettingInputs.criticalThreshold.value,
+      enableSounds: capacitySettingInputs.enableSounds.checked
+    });
+    applyCapacitySettings(settings);
+    settingsStatus.textContent = "Saving locally...";
+    await chrome.storage.local.set({
+      [ChatGPTUsageConfig.storageKeys.capacitySettings]: settings
+    });
+    settingsStatus.textContent = "";
   }
 
   async function refresh(userRequested) {
@@ -176,21 +228,34 @@
     const primaryLimits = document.getElementById("primaryLimits");
     const otherLimits = document.getElementById("otherLimitsSection");
     const totals = document.getElementById("totalsSection");
+    const has5hData = hasMetricData(snapshot, "codex5h");
     primaryLimits.textContent = "";
     otherLimits.textContent = "";
     totals.textContent = "";
 
-    appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
+    if (has5hData) {
+      appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
+    }
     appendMetric(primaryLimits, snapshot, "codexWeekly", "Weekly limit", "primary-metric");
+    if (!has5hData) {
+      appendMetric(otherLimits, snapshot, "codex5h", "5h limit", "secondary-metric");
+    }
     appendMetric(otherLimits, snapshot, "codexSpark5h", "GPT-5.3-Codex-Spark 5h", "secondary-metric");
     appendMetric(otherLimits, snapshot, "codexSparkWeekly", "GPT-5.3-Codex-Spark weekly", "secondary-metric");
     appendMetric(totals, snapshot, "codexCredits", "Credits", "total-metric");
     appendMetric(totals, snapshot, "bankedResets", "Full resets banked", "total-metric");
   }
 
+  function hasMetricData(snapshot, key) {
+    const field = snapshot && snapshot.usage && snapshot.usage[key];
+    if (!field) return false;
+    if (field.value !== undefined && field.value !== null && String(field.value).trim()) return true;
+    return Boolean(field.structured && Number.isFinite(field.structured.remainingPercent));
+  }
+
   function appendMetric(section, snapshot, key, fallbackTitle, className) {
     const field = snapshot && snapshot.usage && snapshot.usage[key];
-    const card = field && field.value
+    const card = hasMetricData(snapshot, key)
       ? renderMetricCard(field, fallbackTitle)
       : renderUnavailableCard(fallbackTitle);
     card.classList.add(className);
@@ -238,6 +303,14 @@
 
     const meta = document.createElement("div");
     meta.className = "metric-meta";
+
+    if (hasRemainingPercent) {
+      value.setAttribute("aria-label", `${structured.remainingPercent}% remaining`);
+      const remaining = document.createElement("div");
+      remaining.className = "metric-reset";
+      remaining.textContent = "Remaining";
+      meta.append(remaining);
+    }
 
     if (structured.resetText) {
       const reset = document.createElement("div");
