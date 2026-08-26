@@ -21,6 +21,7 @@ let retainedSignInTabUpdate = Promise.resolve();
 let capacityUpdate = Promise.resolve();
 let capacityInitializationPromise = Promise.resolve();
 let capacityGeneration = 0;
+let capacitySuppressed = false;
 const actionIconBitmapPromises = new Map();
 const adoptedAnalyticsTabIds = new Set();
 
@@ -671,17 +672,7 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
   if (expectedCapacityGeneration !== capacityGeneration) {
     return { ignored: true, reason: "Capacity session changed during initialization." };
   }
-  const initialRawSettings = data[storageKeys.capacitySettings];
-  let settings = CodexCapacityMonitor.normalizeSettings(initialRawSettings);
-  if (JSON.stringify(initialRawSettings) !== JSON.stringify(settings)) {
-    const currentData = await chrome.storage.local.get([storageKeys.capacitySettings]);
-    const currentRawSettings = currentData[storageKeys.capacitySettings];
-    if (JSON.stringify(currentRawSettings) === JSON.stringify(initialRawSettings)) {
-      await chrome.storage.local.set({ [storageKeys.capacitySettings]: settings });
-    } else {
-      settings = CodexCapacityMonitor.normalizeSettings(currentRawSettings);
-    }
-  }
+  const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
   if (expectedCapacityGeneration !== capacityGeneration) {
     return { ignored: true, reason: "Capacity session changed while initializing settings." };
   }
@@ -690,7 +681,7 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
   const rawMonitorState = data[storageKeys.capacityState];
   let available;
   if (isSignedOutUsageState(usageState)) {
-    capacityGeneration += 1;
+    markCapacitySuppressed();
     await clearCapacityMonitorStateSerialized();
     return { suppressed: true };
   } else if (rawMonitorState === undefined || rawMonitorState === null) {
@@ -700,8 +691,10 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
     await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
     available = CodexCapacityMonitor.extractFreshStateCounters(baseline.state);
   } else if (rawMonitorState.suppressed) {
+    capacitySuppressed = true;
     available = [];
   } else {
+    capacitySuppressed = false;
     available = CodexCapacityMonitor.extractFreshStateCounters(rawMonitorState);
   }
   if (rawMonitorState && !rawMonitorState.suppressed) {
@@ -744,10 +737,10 @@ async function processCapacitySnapshotSerialized(snapshot, expectedCapacityGener
     data[storageKeys.capacitySettings]
   );
   const storageUpdate = { [storageKeys.capacityState]: evaluation.state };
-  if (JSON.stringify(data[storageKeys.capacitySettings]) !== JSON.stringify(evaluation.settings)) {
-    storageUpdate[storageKeys.capacitySettings] = evaluation.settings;
-  }
   await chrome.storage.local.set(storageUpdate);
+  if (expectedCapacityGeneration === capacityGeneration) {
+    capacitySuppressed = false;
+  }
   await applyCapacityVisual(evaluation.visual);
   await clearRecoveredOrExpiredExhaustedNotifications(
     data[storageKeys.capacityState],
@@ -813,13 +806,20 @@ function createSuppressedCapacityState() {
 }
 
 function clearCapacityMonitorState() {
-  capacityGeneration += 1;
+  if (!markCapacitySuppressed()) return capacityUpdate;
   const result = capacityUpdate.then(
     () => clearCapacityMonitorStateSerialized(),
     () => clearCapacityMonitorStateSerialized()
   );
   capacityUpdate = result.catch(() => {});
   return result;
+}
+
+function markCapacitySuppressed() {
+  if (capacitySuppressed) return false;
+  capacitySuppressed = true;
+  capacityGeneration += 1;
+  return true;
 }
 
 async function clearCapacityMonitorStateSerialized() {

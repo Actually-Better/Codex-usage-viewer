@@ -788,6 +788,55 @@ test("in-place authentication after logout establishes a new capacity baseline",
   assert.equal(harness.calls.notifications.length, 0);
 });
 
+test("a repeated content logout does not invalidate in-place reauthentication", async () => {
+  const previousAccount = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "80% remaining", structured: { remainingPercent: 80 } }
+    }
+  }, null, {});
+  let harness;
+  harness = createBackgroundHarness({
+    capacityState: previousAccount.state,
+    async snapshot(callNumber) {
+      if (callNumber === 1) {
+        return {
+          status: "ok",
+          loginStatus: "logged-out",
+          codexAnalytics: { pageDetected: true },
+          domUsageVisible: false,
+          usage: {}
+        };
+      }
+      if (callNumber === 2) {
+        await harness.run(`saveContentSnapshot(${JSON.stringify({
+          status: "ok",
+          loginStatus: "logged-out",
+          codexAnalytics: { pageDetected: true },
+          domUsageVisible: false,
+          usage: {}
+        })}, { id: 7 })`);
+      }
+      const visible = visibleSnapshot();
+      visible.usage.codexWeekly = {
+        value: "5% remaining",
+        structured: { remainingPercent: 5 }
+      };
+      return visible;
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  await harness.run("requestSnapshotWithRetry(7)");
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, undefined);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
+    5
+  );
+  assert.equal(harness.calls.notifications.length, 0);
+});
+
 test("disabling notifications clears every capacity alert type", async () => {
   const harness = createBackgroundHarness();
   await new Promise((resolve) => setImmediate(resolve));
