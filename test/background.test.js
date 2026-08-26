@@ -246,6 +246,45 @@ test("background worker startup repairs a missing periodic alarm", async () => {
   }]);
 });
 
+test("browser startup refreshes usage when the stored data is stale", async () => {
+  const staleAt = new Date(
+    Date.now() - ChatGPTUsageConfig.refreshPeriodMinutes * 60 * 1000
+  ).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: staleAt, lastRefreshAt: staleAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.startupRefreshReasons = [];
+  harness.context.fakeStartupRefresh = async (reason) => {
+    harness.context.startupRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakeStartupRefresh");
+
+  await harness.listeners.startup();
+
+  assert.deepEqual(Array.from(harness.context.startupRefreshReasons), ["startup"]);
+});
+
+test("browser startup skips the refresh when collected usage is still recent", async () => {
+  const recentAt = new Date(Date.now() - 60 * 1000).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: recentAt, lastRefreshAt: recentAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.startupRefreshReasons = [];
+  harness.context.fakeStartupRefresh = async (reason) => {
+    harness.context.startupRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakeStartupRefresh");
+
+  const result = await harness.listeners.startup();
+
+  assert.equal(result.skipped, true);
+  assert.deepEqual(Array.from(harness.context.startupRefreshReasons), []);
+});
+
 test("scheduled checks use the same bounded refresh wrapper as the popup", async () => {
   const harness = createBackgroundHarness();
   await new Promise((resolve) => setImmediate(resolve));

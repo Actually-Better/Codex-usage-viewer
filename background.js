@@ -37,10 +37,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await initializeCapacityUi();
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  ensureRefreshAlarm().catch(() => {});
-  initializeCapacityUi().catch(() => {});
-});
+chrome.runtime.onStartup.addListener(() => refreshOnStartup().catch(() => {}));
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
@@ -203,6 +200,25 @@ async function getPopupState() {
 
 async function refreshForPopup() {
   return refreshOnce("popup");
+}
+
+async function refreshOnStartup(now = Date.now()) {
+  await ensureRefreshAlarm();
+  await initializeCapacityUi();
+  const data = await chrome.storage.local.get([storageKeys.state]);
+  if (!shouldRefreshOnStartup(data[storageKeys.state], now)) {
+    return { ok: true, skipped: true, reason: "Usage data is still recent." };
+  }
+  return refreshWithTimeout("startup");
+}
+
+function shouldRefreshOnStartup(state, now = Date.now()) {
+  const collectedAt = Date.parse(state && (state.dataCollectedAt || state.lastRefreshAt));
+  const maxAgeMs = refreshPeriodMinutes * 60 * 1000;
+  return !Number.isFinite(collectedAt)
+    || !Number.isFinite(now)
+    || now < collectedAt
+    || now - collectedAt >= maxAgeMs;
 }
 
 function refreshWithTimeout(reason) {

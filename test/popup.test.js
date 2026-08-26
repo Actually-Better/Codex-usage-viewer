@@ -11,7 +11,8 @@ const offscreenSource = readFileSync(join(__dirname, "..", "offscreen.js"), "utf
 test("the popup uses the compact layout without a mode toggle", () => {
   assert.doesNotMatch(popupHtml, /compactModeToggle|compact-toggle|toggle-track|body\.compact/);
   assert.doesNotMatch(popupSource, /storageKeys\.compactMode|applyCompactMode|saveCompactMode/);
-  assert.match(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
+  assert.match(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*1fr/s);
+  assert.doesNotMatch(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(popupHtml, /#chatgptSection\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(popupSource, /classList\.add\("percentage-metric", `usage-\$\{usageLevel\}`\)/);
   assert.match(popupHtml, /\.percentage-metric \.metric-value\s*{[^}]*conic-gradient/s);
