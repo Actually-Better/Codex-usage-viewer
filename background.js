@@ -44,7 +44,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
-    refreshOnce("alarm").catch(() => {});
+    refreshWithTimeout("alarm").catch(() => {});
   }
 });
 
@@ -89,7 +89,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "usage:refresh") {
-    withTimeout(refreshForPopup(), REFRESH_TIMEOUT_MS, "Refresh timed out.").then(sendResponse);
+    refreshWithTimeout("popup").then(sendResponse);
     return true;
   }
 
@@ -203,6 +203,18 @@ async function getPopupState() {
 
 async function refreshForPopup() {
   return refreshOnce("popup");
+}
+
+function refreshWithTimeout(reason) {
+  const refreshPromise = refreshOnce(reason);
+  const expectedRefreshGeneration = analyticsRefreshContext
+    && analyticsRefreshContext.generation;
+  return withTimeout(
+    refreshPromise,
+    REFRESH_TIMEOUT_MS,
+    "Refresh timed out.",
+    expectedRefreshGeneration
+  );
 }
 
 async function openCodexAnalyticsPage() {
@@ -1267,9 +1279,15 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withTimeout(promise, ms, message) {
+async function withTimeout(
+  promise,
+  ms,
+  message,
+  expectedRefreshGeneration = null
+) {
   let timeoutId = null;
   let timedOut = false;
+  let invalidatedRefreshGeneration = null;
   try {
     return await Promise.race([
       promise,
@@ -1282,12 +1300,32 @@ async function withTimeout(promise, ms, message) {
     ]);
   } catch (error) {
     if (timedOut) {
+      if (Number.isInteger(expectedRefreshGeneration)
+        && expectedRefreshGeneration !== analyticsRefreshGeneration) {
+        const latest = await chrome.storage.local.get([storageKeys.state]);
+        return {
+          ok: false,
+          ignored: true,
+          state: latest[storageKeys.state] || {},
+          error: String(error && error.message ? error.message : error)
+        };
+      }
       analyticsRefreshGeneration += 1;
+      invalidatedRefreshGeneration = analyticsRefreshGeneration;
       analyticsRefreshPromise = null;
       analyticsRefreshContext = null;
       await expireCapacityMonitorState().catch(() => {});
     }
     const data = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
+    if (invalidatedRefreshGeneration !== null
+      && invalidatedRefreshGeneration !== analyticsRefreshGeneration) {
+      return {
+        ok: false,
+        ignored: true,
+        state: data[storageKeys.state] || {},
+        error: String(error && error.message ? error.message : error)
+      };
+    }
     const state = {
       ...(data[storageKeys.state] || {}),
       status: "refresh-timeout",

@@ -207,6 +207,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   return {
     calls,
     context,
+    listeners,
     sessionStorage,
     storage,
     getOpenTabs() {
@@ -243,6 +244,21 @@ test("background worker startup repairs a missing periodic alarm", async () => {
     delayInMinutes: 1,
     periodInMinutes: 15
   }]);
+});
+
+test("scheduled checks use the same bounded refresh wrapper as the popup", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.boundedRefreshReasons = [];
+  harness.context.fakeRefreshWithTimeout = async (reason) => {
+    harness.context.boundedRefreshReasons.push(reason);
+  };
+  harness.run("refreshWithTimeout = fakeRefreshWithTimeout");
+
+  harness.listeners.alarm({ name: ChatGPTUsageConfig.refreshAlarmName });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(Array.from(harness.context.boundedRefreshReasons), ["alarm"]);
 });
 
 test("capacity alerts persist crossings and never repeat the same alert", async () => {
@@ -990,6 +1006,79 @@ test("a popup timeout expires stale capacity and abandons the hung refresh", asy
     "codex-capacity-codexWeekly-exhausted"
   ));
   assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
+test("timeout cleanup never overwrites a newer refresh state", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  let releaseExpiration;
+  let expirationStarted;
+  const expirationBlocked = new Promise((resolve) => { expirationStarted = resolve; });
+  const expirationReleased = new Promise((resolve) => { releaseExpiration = resolve; });
+  harness.context.blockingExpireCapacityState = async () => {
+    expirationStarted();
+    await expirationReleased;
+  };
+  harness.context.hungRefresh = new Promise(() => {});
+  harness.run(`expireCapacityMonitorState = blockingExpireCapacityState;
+    analyticsRefreshGeneration = 20;
+    analyticsRefreshPromise = hungRefresh;
+    analyticsRefreshContext = {
+      popupRequested: true,
+      acceptingPopupJoin: true,
+      generation: analyticsRefreshGeneration
+    };`);
+
+  const timingOut = harness.run(
+    "withTimeout(hungRefresh, 1, 'Refresh timed out.')"
+  );
+  await expirationBlocked;
+  harness.run("analyticsRefreshGeneration += 1");
+  harness.storage[ChatGPTUsageConfig.storageKeys.state] = {
+    status: "usage-current",
+    snapshot: {
+      ...visibleSnapshot(),
+      usage: {
+        codexWeekly: { value: "40% remaining", structured: { remainingPercent: 40 } }
+      }
+    }
+  };
+  releaseExpiration();
+  const result = await timingOut;
+
+  assert.equal(result.ignored, true);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.state].status,
+    "usage-current"
+  );
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.state]
+      .snapshot.usage.codexWeekly.structured.remainingPercent,
+    40
+  );
+});
+
+test("a late timeout cannot invalidate a different refresh generation", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.oldHungRefresh = new Promise(() => {});
+  harness.context.newHungRefresh = new Promise(() => {});
+  harness.run(`analyticsRefreshGeneration = 31;
+    analyticsRefreshPromise = newHungRefresh;
+    analyticsRefreshContext = {
+      popupRequested: false,
+      acceptingPopupJoin: true,
+      generation: analyticsRefreshGeneration
+    };`);
+
+  const result = await harness.run(
+    "withTimeout(oldHungRefresh, 1, 'Refresh timed out.', 30)"
+  );
+
+  assert.equal(result.ignored, true);
+  assert.equal(harness.run("analyticsRefreshGeneration"), 31);
+  assert.equal(harness.run("analyticsRefreshPromise === newHungRefresh"), true);
+  assert.equal(harness.run("analyticsRefreshContext.generation"), 31);
 });
 
 test("a late timed-out refresh cannot overwrite a newer snapshot", async () => {
