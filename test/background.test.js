@@ -691,6 +691,32 @@ test("startup clears a persistent exhausted notification after its counter expir
   assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
+test("startup keeps an exhausted notification for a fresh missing counter", async () => {
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "50% remaining", structured: { remainingPercent: 50 } },
+      codex5h: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {});
+  const missing = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "49% remaining", structured: { remainingPercent: 49 } }
+    }
+  }, exhausted.state, {});
+  const harness = createBackgroundHarness({ capacityState: missing.state });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"),
+    false
+  );
+  assert.deepEqual(
+    Array.from(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].availableKeys),
+    ["codexWeekly"]
+  );
+});
+
 test("a logged-out retry discards usage accumulated earlier in the same refresh", async () => {
   const harness = createBackgroundHarness({
     snapshot(callNumber) {
@@ -774,6 +800,35 @@ test("disabling notifications clears every capacity alert type", async () => {
   assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-reset"));
+});
+
+test("startup normalization preserves settings changed after its first read", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.storage[ChatGPTUsageConfig.storageKeys.capacitySettings] = null;
+
+  const originalGet = harness.context.chrome.storage.local.get;
+  let injectConcurrentSettings = true;
+  harness.context.chrome.storage.local.get = async (keys) => {
+    const result = await originalGet(keys);
+    if (injectConcurrentSettings && keys.includes(ChatGPTUsageConfig.storageKeys.capacityState)) {
+      injectConcurrentSettings = false;
+      queueMicrotask(() => {
+        harness.storage[ChatGPTUsageConfig.storageKeys.capacitySettings] = {
+          ...CodexCapacityMonitor.DEFAULT_SETTINGS,
+          enableNotifications: false
+        };
+      });
+    }
+    return result;
+  };
+
+  await harness.run("initializeCapacityUi()");
+
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacitySettings].enableNotifications,
+    false
+  );
 });
 
 test("notification opt-out wins over a capacity alert already in flight", async () => {
