@@ -398,6 +398,7 @@ test("supported browsers render the percentage as a larger custom action icon ba
 
 test("startup seeds capacity state from a cached snapshot without alerting", async () => {
   const cached = visibleSnapshot();
+  cached.collectedAt = new Date().toISOString();
   cached.usage.codexWeekly = {
     value: "20% remaining",
     structured: { remainingPercent: 20 }
@@ -421,6 +422,25 @@ test("startup seeds capacity state from a cached snapshot without alerting", asy
     }
   })})`);
   assert.equal(harness.calls.notifications.at(-1).id, "codex-capacity-codexWeekly-critical");
+});
+
+test("startup rejects a cached capacity snapshot older than retention", async () => {
+  const cached = visibleSnapshot();
+  cached.collectedAt = new Date(Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1).toISOString();
+  cached.usage.codexWeekly = {
+    value: "4% remaining",
+    structured: { remainingPercent: 4 }
+  };
+  const harness = createBackgroundHarness({ initialState: { snapshot: cached } });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    Object.keys(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters).length,
+    0
+  );
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+  assert.equal(harness.calls.notifications.length, 0);
 });
 
 test("startup never seeds capacity from a signed-out cached snapshot", async () => {
@@ -504,6 +524,32 @@ test("explicit sign-out suppresses cached capacity and clears exhausted notifica
   );
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
+test("an expired missing counter clears its persistent exhausted notification", async () => {
+  const staleSeenAt = new Date(
+    Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1
+  ).toISOString();
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codex5h: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {}, staleSeenAt);
+  const harness = createBackgroundHarness({ capacityState: exhausted.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.clearedNotifications.length = 0;
+
+  await harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: { value: "50% remaining", structured: { remainingPercent: 50 } }
+    }
+  })})`);
+
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codex5h,
+    undefined
+  );
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"));
 });
 
 test("a logged-out retry discards usage accumulated earlier in the same refresh", async () => {

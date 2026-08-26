@@ -141,8 +141,8 @@ When a value cannot be found from visible text, the extension leaves that metric
 - Repeated reads in the same range do not notify again. A direct jump across multiple thresholds emits only the most severe newly reached state, avoiding a burst of notifications.
 - The first valid observation establishes the baseline and visual state without creating a potentially stale notification.
 - Only stable or completed best-effort refreshes evaluate threshold crossings. DOM mutation snapshots may update the popup cache but cannot emit alerts.
-- Capacity baselines are seeded during upgrades only while signed in, cleared on explicit sign-out, and re-established without alerts after two missed 15-minute observations.
-- A persistent exhausted notification is cleared as soon as that counter reports capacity above 0%; disabling notifications clears any capacity alerts still visible.
+- Capacity baselines are seeded during upgrades only while signed in and when the cached read is at most 30 minutes old, cleared on explicit sign-out, and re-established without alerts after two missed 15-minute observations.
+- A persistent exhausted notification is cleared as soon as that counter reports capacity above 0% or its observation expires; disabling notifications clears any capacity alerts still visible.
 
 ## Troubleshooting
 
