@@ -966,8 +966,13 @@ test("a popup timeout expires stale capacity and abandons the hung refresh", asy
     ).toISOString();
   harness.calls.clearedNotifications.length = 0;
   harness.context.hungRefresh = new Promise(() => {});
-  harness.run(`analyticsRefreshPromise = hungRefresh;
-    analyticsRefreshContext = { popupRequested: true, acceptingPopupJoin: true };`);
+  harness.run(`analyticsRefreshGeneration = 4;
+    analyticsRefreshPromise = hungRefresh;
+    analyticsRefreshContext = {
+      popupRequested: true,
+      acceptingPopupJoin: true,
+      generation: analyticsRefreshGeneration
+    };`);
 
   const result = await harness.run(
     "withTimeout(hungRefresh, 1, 'Refresh timed out.')"
@@ -976,6 +981,7 @@ test("a popup timeout expires stale capacity and abandons the hung refresh", asy
   assert.equal(result.ok, false);
   assert.equal(harness.run("analyticsRefreshPromise === null"), true);
   assert.equal(harness.run("analyticsRefreshContext === null"), true);
+  assert.equal(harness.run("analyticsRefreshGeneration"), 5);
   assert.equal(
     harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly,
     undefined
@@ -984,6 +990,102 @@ test("a popup timeout expires stale capacity and abandons the hung refresh", asy
     "codex-capacity-codexWeekly-exhausted"
   ));
   assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
+test("a late timed-out refresh cannot overwrite a newer snapshot", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  const newerSnapshot = {
+    ...visibleSnapshot(),
+    collectedAt: "2026-08-26T11:30:00.000Z",
+    usage: {
+      codexWeekly: { value: "40% remaining", structured: { remainingPercent: 40 } }
+    }
+  };
+  const staleSnapshot = {
+    ...visibleSnapshot(),
+    collectedAt: "2026-08-26T11:20:00.000Z",
+    usage: {
+      codexWeekly: { value: "5% remaining", structured: { remainingPercent: 5 } }
+    }
+  };
+  harness.run("analyticsRefreshGeneration = 8");
+
+  await harness.run(`saveSnapshot(
+    ${JSON.stringify(newerSnapshot)},
+    { id: 8 },
+    "requested-stable",
+    capacityGeneration,
+    ${JSON.stringify(newerSnapshot)},
+    8
+  )`);
+  await assert.rejects(
+    harness.run(`saveSnapshot(
+      ${JSON.stringify(staleSnapshot)},
+      { id: 7 },
+      "requested-stable",
+      capacityGeneration,
+      ${JSON.stringify(staleSnapshot)},
+      7
+    )`),
+    /expired before it could persist results/
+  );
+
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.state]
+      .snapshot.usage.codexWeekly.structured.remainingPercent,
+    40
+  );
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState]
+      .counters.codexWeekly.remainingPercent,
+    40
+  );
+});
+
+test("a timed-out refresh cannot emit a queued capacity alert", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+  const originalGet = harness.context.chrome.storage.local.get;
+  let releaseCapacityRead;
+  let capacityReadStarted;
+  let blockNextCapacityRead = true;
+  const capacityReadBlocked = new Promise((resolve) => { capacityReadStarted = resolve; });
+  const capacityReadReleased = new Promise((resolve) => { releaseCapacityRead = resolve; });
+  harness.context.chrome.storage.local.get = async (keys) => {
+    if (blockNextCapacityRead
+      && keys.includes(ChatGPTUsageConfig.storageKeys.capacityState)) {
+      blockNextCapacityRead = false;
+      capacityReadStarted();
+      await capacityReadReleased;
+    }
+    return originalGet(keys);
+  };
+  harness.run("analyticsRefreshGeneration = 12");
+
+  const processing = harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: { value: "5% remaining", structured: { remainingPercent: 5 } }
+    }
+  })}, capacityGeneration, 12)`);
+  await capacityReadBlocked;
+  harness.run("analyticsRefreshGeneration = 13");
+  releaseCapacityRead();
+  const result = await processing;
+
+  assert.equal(result.ignored, true);
+  assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState]
+      .counters.codexWeekly.remainingPercent,
+    11
+  );
 });
 
 test("startup normalization preserves settings changed after its first read", async () => {
