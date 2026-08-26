@@ -336,6 +336,45 @@ test("sign-out wins over an accepted capacity update already in flight", async (
   assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
+test("sign-out before alert emission suppresses the in-flight notification", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const originalSetTitle = harness.context.chrome.action.setTitle;
+  let releaseVisualUpdate;
+  let visualUpdateStarted;
+  const visualUpdateBlocked = new Promise((resolve) => { visualUpdateStarted = resolve; });
+  const visualUpdateReleased = new Promise((resolve) => { releaseVisualUpdate = resolve; });
+  let blockNextVisualUpdate = true;
+  harness.context.chrome.action.setTitle = async (options) => {
+    if (blockNextVisualUpdate) {
+      blockNextVisualUpdate = false;
+      visualUpdateStarted();
+      await visualUpdateReleased;
+    }
+    return originalSetTitle(options);
+  };
+
+  const processing = harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: { value: "10% remaining", structured: { remainingPercent: 10 } }
+    }
+  })})`);
+  await visualUpdateBlocked;
+  const clearing = harness.run("clearCapacityMonitorState()");
+  releaseVisualUpdate();
+  await Promise.all([processing, clearing]);
+
+  assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+});
+
 test("sign-out wins over startup capacity initialization already in flight", async () => {
   const cached = visibleSnapshot();
   cached.usage.codexWeekly = {
@@ -550,6 +589,23 @@ test("an expired missing counter clears its persistent exhausted notification", 
     undefined
   );
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"));
+});
+
+test("startup clears a persistent exhausted notification after its counter expires", async () => {
+  const staleSeenAt = new Date(
+    Date.now() - CodexCapacityMonitor.COUNTER_STALE_AFTER_MS - 1
+  ).toISOString();
+  const exhausted = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codex5h: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {}, staleSeenAt);
+  const harness = createBackgroundHarness({ capacityState: exhausted.state });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codex5h-exhausted"));
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
 });
 
 test("a logged-out retry discards usage accumulated earlier in the same refresh", async () => {

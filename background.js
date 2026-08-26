@@ -653,6 +653,9 @@ async function initializeCapacityUiSerialized(expectedCapacityGeneration) {
   } else {
     available = CodexCapacityMonitor.extractFreshStateCounters(rawMonitorState);
   }
+  if (rawMonitorState && !rawMonitorState.suppressed) {
+    await clearExpiredExhaustedNotifications(rawMonitorState, available);
+  }
   await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
 }
 
@@ -701,11 +704,13 @@ async function processCapacitySnapshotSerialized(snapshot, expectedCapacityGener
   );
 
   for (const event of evaluation.events) {
+    if (expectedCapacityGeneration !== capacityGeneration) break;
     if (CodexCapacityMonitor.shouldNotify(event, evaluation.settings)) {
       await showCapacityNotification(event).catch(() => {});
     }
   }
-  if (evaluation.events.some((event) => CodexCapacityMonitor.shouldPlaySound(event, evaluation.settings))) {
+  if (expectedCapacityGeneration === capacityGeneration
+    && evaluation.events.some((event) => CodexCapacityMonitor.shouldPlaySound(event, evaluation.settings))) {
     await playCapacitySound().catch(() => {});
   }
   return evaluation;
@@ -790,6 +795,19 @@ async function clearRecoveredOrExpiredExhaustedNotifications(previousState, eval
       && !next.counters[key]
     ));
   await Promise.all([...new Set([...recoveredKeys, ...expiredKeys])]
+    .map((key) => clearCapacityNotification(key, "exhausted")));
+}
+
+async function clearExpiredExhaustedNotifications(previousState, freshCounters) {
+  const previous = CodexCapacityMonitor.normalizeMonitorState(previousState);
+  const freshKeys = new Set((freshCounters || []).map((counter) => counter.key));
+  await Promise.all(CodexCapacityMonitor.COUNTERS
+    .map((counter) => counter.key)
+    .filter((key) => (
+      previous.counters[key]
+      && previous.counters[key].remainingPercent === 0
+      && !freshKeys.has(key)
+    ))
     .map((key) => clearCapacityNotification(key, "exhausted")));
 }
 
