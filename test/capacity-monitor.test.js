@@ -164,4 +164,7 @@ test("custom thresholds are normalized and applied", () => {
     lowThreshold: 3,
     criticalThreshold: 3
   });
+  assert.deepEqual(CodexCapacityMonitor.normalizeSettings({ lowThreshold: "", criticalThreshold: "  " }), {
+    ...CodexCapacityMonitor.DEFAULT_SETTINGS
+  });
 });

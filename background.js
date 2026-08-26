@@ -19,6 +19,7 @@ let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
 let retainedSignInTabUpdate = Promise.resolve();
 let capacityUpdate = Promise.resolve();
+let capacityGeneration = 0;
 const actionIconBitmapPromises = new Map();
 const adoptedAnalyticsTabIds = new Set();
 
@@ -104,7 +105,7 @@ async function recordLocalMessage(payload) {
   return { ok: true };
 }
 
-async function saveSnapshot(snapshot, tab, source) {
+async function saveSnapshot(snapshot, tab, source, expectedCapacityGeneration = capacityGeneration) {
   const existing = await chrome.storage.local.get([storageKeys.state, storageKeys.counters]);
   const currentState = existing[storageKeys.state] || {};
   const counters = ChatGPTUsageModel.normalizeCounters(existing[storageKeys.counters]);
@@ -127,7 +128,7 @@ async function saveSnapshot(snapshot, tab, source) {
     [storageKeys.counters]: counters
   });
   if (hasVisibleUsage && (source === "requested-stable" || source === "requested-best-effort")) {
-    await processCapacitySnapshot(nextState.snapshot).catch(() => {});
+    await processCapacitySnapshot(nextState.snapshot, expectedCapacityGeneration).catch(() => {});
   }
   return { ok: true, state: nextState, pageLoginStatus: snapshot && snapshot.loginStatus };
 }
@@ -508,6 +509,7 @@ async function markRefreshStarted(reason) {
 }
 
 async function requestSnapshotWithRetry(tabId) {
+  const expectedCapacityGeneration = capacityGeneration;
   let lastError = null;
   let lastSnapshot = null;
   let accumulatedSnapshot = null;
@@ -538,7 +540,12 @@ async function requestSnapshotWithRetry(tabId) {
           const readsSinceFirstData = attempt - firstVisibleAttempt + 1;
           if (stableUsageReads >= ANALYTICS_STABLE_READS_REQUIRED
             && readsSinceFirstData >= ANALYTICS_MIN_READS_AFTER_FIRST_DATA) {
-            return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-stable");
+            return saveSnapshot(
+              accumulatedSnapshot,
+              { id: tabId },
+              "requested-stable",
+              expectedCapacityGeneration
+            );
           }
         }
       }
@@ -546,7 +553,14 @@ async function requestSnapshotWithRetry(tabId) {
       lastError = error;
     }
   }
-  if (accumulatedSnapshot) return saveSnapshot(accumulatedSnapshot, { id: tabId }, "requested-best-effort");
+  if (accumulatedSnapshot) {
+    return saveSnapshot(
+      accumulatedSnapshot,
+      { id: tabId },
+      "requested-best-effort",
+      expectedCapacityGeneration
+    );
+  }
   if (lastSnapshot) return saveIncompleteRefresh(lastSnapshot, tabId);
   throw lastError || new Error("Codex Analytics content script did not respond.");
 }
@@ -603,9 +617,8 @@ async function initializeCapacityUi() {
   const rawMonitorState = data[storageKeys.capacityState];
   let available;
   if (isSignedOutUsageState(usageState)) {
-    await chrome.storage.local.set({ [storageKeys.capacityState]: createSuppressedCapacityState() });
-    await clearAllCapacityNotifications();
-    available = [];
+    await clearCapacityMonitorState();
+    return;
   } else if (rawMonitorState === undefined || rawMonitorState === null) {
     const baseline = CodexCapacityMonitor.evaluateSnapshot(snapshot, null, settings);
     await chrome.storage.local.set({ [storageKeys.capacityState]: baseline.state });
@@ -618,20 +631,26 @@ async function initializeCapacityUi() {
   await applyCapacityVisual(CodexCapacityMonitor.deriveVisualState(available, settings));
 }
 
-function processCapacitySnapshot(snapshot) {
+function processCapacitySnapshot(snapshot, expectedCapacityGeneration = capacityGeneration) {
   const result = capacityUpdate.then(
-    () => processCapacitySnapshotSerialized(snapshot),
-    () => processCapacitySnapshotSerialized(snapshot)
+    () => processCapacitySnapshotSerialized(snapshot, expectedCapacityGeneration),
+    () => processCapacitySnapshotSerialized(snapshot, expectedCapacityGeneration)
   );
   capacityUpdate = result.catch(() => {});
   return result;
 }
 
-async function processCapacitySnapshotSerialized(snapshot) {
+async function processCapacitySnapshotSerialized(snapshot, expectedCapacityGeneration) {
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed before processing." };
+  }
   const data = await chrome.storage.local.get([
     storageKeys.capacitySettings,
     storageKeys.capacityState
   ]);
+  if (expectedCapacityGeneration !== capacityGeneration) {
+    return { ignored: true, reason: "Capacity session changed during processing." };
+  }
   const evaluation = CodexCapacityMonitor.evaluateSnapshot(
     snapshot,
     data[storageKeys.capacityState],
@@ -692,7 +711,17 @@ function createSuppressedCapacityState() {
   };
 }
 
-async function clearCapacityMonitorState() {
+function clearCapacityMonitorState() {
+  capacityGeneration += 1;
+  const result = capacityUpdate.then(
+    () => clearCapacityMonitorStateSerialized(),
+    () => clearCapacityMonitorStateSerialized()
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function clearCapacityMonitorStateSerialized() {
   const data = await chrome.storage.local.get([storageKeys.capacitySettings]);
   const settings = CodexCapacityMonitor.normalizeSettings(data[storageKeys.capacitySettings]);
   await chrome.storage.local.set({

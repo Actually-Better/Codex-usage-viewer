@@ -231,6 +231,9 @@
   }
 
   function clampInteger(value, min, max, fallback) {
+    if (value === null || value === undefined || (typeof value === "string" && !value.trim())) {
+      return fallback;
+    }
     const number = Number(value);
     if (!Number.isFinite(number)) return fallback;
     return Math.min(max, Math.max(min, Math.round(number)));

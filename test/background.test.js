@@ -294,6 +294,46 @@ test("concurrent snapshots serialize one threshold notification", async () => {
   assert.equal(harness.calls.notifications[0].id, "codex-capacity-codexWeekly-low");
 });
 
+test("sign-out wins over an accepted capacity update already in flight", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "11% remaining", structured: { remainingPercent: 11 } }
+    }
+  }, null, {});
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const originalGet = harness.context.chrome.storage.local.get;
+  let releaseCapacityRead;
+  let capacityReadStarted;
+  const capacityReadBlocked = new Promise((resolve) => { capacityReadStarted = resolve; });
+  const capacityReadReleased = new Promise((resolve) => { releaseCapacityRead = resolve; });
+  let blockNextCapacityRead = true;
+  harness.context.chrome.storage.local.get = async (keys) => {
+    if (blockNextCapacityRead && keys.includes(ChatGPTUsageConfig.storageKeys.capacityState)) {
+      blockNextCapacityRead = false;
+      capacityReadStarted();
+      await capacityReadReleased;
+    }
+    return originalGet(keys);
+  };
+
+  const processing = harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: { value: "10% remaining", structured: { remainingPercent: 10 } }
+    }
+  })})`);
+  await capacityReadBlocked;
+  const clearing = harness.run("clearCapacityMonitorState()");
+  releaseCapacityRead();
+  await Promise.all([processing, clearing]);
+
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].suppressed, true);
+  assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(harness.calls.badgeText.at(-1).text, "");
+});
+
 test("supported browsers render the percentage as a larger custom action icon badge", async () => {
   const harness = createBackgroundHarness({ enableCustomActionIcon: true });
   await new Promise((resolve) => setImmediate(resolve));

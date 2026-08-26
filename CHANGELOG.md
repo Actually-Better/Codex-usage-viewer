@@ -6,7 +6,7 @@ All notable user-facing changes are documented here.
 
 - Add persisted remaining-capacity states for preventive (25%), configurable low/critical thresholds, exhausted (0%), and reset-to-100% transitions.
 - Add larger dynamically rendered toolbar percentages based on the lowest actually available limit, with a native-badge fallback and a setting to hide the permanent percentage outside warning/critical states.
-- Seed upgrade baselines only while signed in, expire stale observations, suppress state on sign-out, discard pre-logout refresh data, restore visuals only from limits in the last accepted read, evaluate alerts only from accepted refresh reads, and clear visible capacity notifications on recovery or opt-out.
+- Seed upgrade baselines only while signed in, expire stale observations, serialize sign-out suppression ahead of older accepted reads, discard pre-logout refresh data, restore visuals only from limits in the last accepted read, evaluate alerts only from accepted refresh reads, and clear visible capacity notifications on recovery or opt-out.
 - Add deduplicated native notifications for low, critical, exhausted, and optional reset events, plus optional offscreen audio that is disabled by default.
 - Treat the 5-hour limit as optional throughout alerts and badge calculations; missing, null, or invalid counters never become a false 0%.
 - Add compact Settings controls for notifications, reset notifications, toolbar percentage, low/critical thresholds, and sounds.
