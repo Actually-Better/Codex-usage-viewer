@@ -509,7 +509,8 @@ async function markRefreshStarted(reason) {
 }
 
 async function requestSnapshotWithRetry(tabId) {
-  const expectedCapacityGeneration = capacityGeneration;
+  let expectedCapacityGeneration = capacityGeneration;
+  let observedLogout = false;
   let lastError = null;
   let lastSnapshot = null;
   let accumulatedSnapshot = null;
@@ -524,6 +525,11 @@ async function requestSnapshotWithRetry(tabId) {
       if (snapshot && snapshot.status === "ok") {
         lastSnapshot = snapshot;
         if (snapshot.loginStatus === "logged-out") {
+          if (!observedLogout) {
+            observedLogout = true;
+            await clearCapacityMonitorState();
+            expectedCapacityGeneration = capacityGeneration;
+          }
           accumulatedSnapshot = null;
           lastUsageSignature = null;
           stableUsageReads = 0;
