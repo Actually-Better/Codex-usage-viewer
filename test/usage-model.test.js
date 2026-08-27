@@ -131,13 +131,6 @@ test("TERMS groups English and Spanish extraction concepts", () => {
   assert.ok(ChatGPTUsageModel.TERMS.bankedResets.includes("restablecimiento completo"));
 });
 
-test("getUsageLevel classifies thresholds", () => {
-  assert.equal(ChatGPTUsageModel.getUsageLevel(51), "green");
-  assert.equal(ChatGPTUsageModel.getUsageLevel(50), "amber");
-  assert.equal(ChatGPTUsageModel.getUsageLevel(15), "amber");
-  assert.equal(ChatGPTUsageModel.getUsageLevel(14), "red");
-  assert.equal(ChatGPTUsageModel.getUsageLevel(null), null);
-});
 
 test("normalizeMetricField prefers structured values", () => {
   const field = {

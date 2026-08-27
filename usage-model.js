@@ -247,13 +247,6 @@
     };
   }
 
-  function getUsageLevel(remainingPercent) {
-    if (typeof remainingPercent !== "number" || !Number.isFinite(remainingPercent)) return null;
-    if (remainingPercent < 15) return "red";
-    if (remainingPercent <= 50) return "amber";
-    return "green";
-  }
-
   function summarizeAvailability(snapshot) {
     if (!snapshot || snapshot.status !== "ok") return "Open ChatGPT to refresh";
     if (snapshot.loginStatus === "logged-out") return "Sign in required";
@@ -604,7 +597,6 @@
     defaultCounters,
     formatRelativeTime,
     formatTime,
-    getUsageLevel,
     hasVisibleUsage,
     matchesUsageTerms,
     normalizeCounters,

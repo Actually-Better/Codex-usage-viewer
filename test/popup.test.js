@@ -14,6 +14,7 @@ test("the popup uses the compact layout without a mode toggle", () => {
   assert.match(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*1fr/s);
   assert.doesNotMatch(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(popupHtml, /#chatgptSection\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
+  assert.match(popupSource, /CodexCapacityMonitor\.classifyUsageLevel\(remainingPercent\)/);
   assert.match(popupSource, /classList\.add\("percentage-metric", `usage-\$\{usageLevel\}`\)/);
   assert.match(popupHtml, /\.percentage-metric \.metric-value\s*{[^}]*conic-gradient/s);
 });

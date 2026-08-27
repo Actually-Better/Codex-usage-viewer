@@ -1112,7 +1112,11 @@ async function applyCapacityVisual(visual) {
   if (!chrome.action) return;
   let usesCustomIcon = false;
   if (visual.badgeText && chrome.action.setIcon) {
-    const imageData = await buildCapacityActionIcon(visual.badgeText, visual.badgeColor).catch(() => null);
+    const imageData = await buildCapacityActionIcon(
+      visual.badgeText,
+      visual.badgeColor,
+      visual.badgeTextColor
+    ).catch(() => null);
     if (imageData) {
       try {
         await chrome.action.setIcon({ imageData });
@@ -1134,7 +1138,7 @@ async function applyCapacityVisual(visual) {
     updates.push(chrome.action.setBadgeBackgroundColor({ color: visual.badgeColor }));
   }
   if (!usesCustomIcon && chrome.action.setBadgeTextColor) {
-    updates.push(chrome.action.setBadgeTextColor({ color: "#ffffff" }));
+    updates.push(chrome.action.setBadgeTextColor({ color: visual.badgeTextColor }));
   }
   if (chrome.action.setTitle) {
     updates.push(chrome.action.setTitle({ title: visual.title }));
@@ -1142,7 +1146,7 @@ async function applyCapacityVisual(visual) {
   await Promise.all(updates);
 }
 
-async function buildCapacityActionIcon(text, color) {
+async function buildCapacityActionIcon(text, color, textColor) {
   if (
     typeof OffscreenCanvas !== "function"
     || typeof createImageBitmap !== "function"
@@ -1157,7 +1161,7 @@ async function buildCapacityActionIcon(text, color) {
     const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) throw new Error("2D canvas is unavailable.");
     context.drawImage(await loadActionIconBitmap(size, path), 0, 0, size, size);
-    drawCapacityBadge(context, size, text, color);
+    drawCapacityBadge(context, size, text, color, textColor);
     return [sizeKey, context.getImageData(0, 0, size, size)];
   }));
   return Object.fromEntries(entries);
@@ -1174,7 +1178,7 @@ function loadActionIconBitmap(size, path) {
   return actionIconBitmapPromises.get(size);
 }
 
-function drawCapacityBadge(context, size, rawText, color) {
+function drawCapacityBadge(context, size, rawText, color, textColor) {
   const text = String(rawText).slice(0, 3);
   const badgeHeight = Math.round(size * 0.6);
   const badgeTop = size - badgeHeight;
@@ -1189,7 +1193,7 @@ function drawCapacityBadge(context, size, rawText, color) {
   context.strokeStyle = "rgba(0, 0, 0, 0.42)";
   context.lineWidth = Math.max(1, Math.round(size / 32));
   context.stroke();
-  context.fillStyle = "#ffffff";
+  context.fillStyle = textColor;
   context.font = `800 ${Math.max(7, Math.round(size * fontScale))}px Arial, sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";

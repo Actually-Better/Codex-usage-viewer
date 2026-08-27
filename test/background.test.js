@@ -19,7 +19,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], badgeDraws: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -176,9 +176,15 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     lineTo() {}
     quadraticCurveTo() {}
     closePath() {}
-    fill() {}
+    fill() { this.badgeBackgroundColor = this.fillStyle; }
     stroke() {}
-    fillText() {}
+    fillText(text) {
+      calls.badgeDraws.push({
+        text,
+        backgroundColor: this.badgeBackgroundColor,
+        textColor: this.fillStyle
+      });
+    }
     restore() {}
     getImageData(x, y, width, height) { return { x, y, width, height }; }
   }
@@ -624,7 +630,29 @@ test("supported browsers render the percentage as a larger custom action icon ba
 
   assert.equal(harness.calls.badgeText.at(-1).text, "");
   assert.deepEqual(Object.keys(harness.calls.actionIcon.at(-1).imageData), ["16", "32", "48"]);
+  assert.deepEqual(harness.calls.badgeDraws.at(-1), {
+    text: "42",
+    backgroundColor: CodexCapacityMonitor.BADGE_COLORS.amber,
+    textColor: "#000000"
+  });
   assert.match(harness.calls.actionTitle.at(-1).title, /42% remaining$/);
+});
+
+test("native action badges receive the same accessible colors as custom badges", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: "14% remaining",
+        structured: { remainingPercent: 14 }
+      }
+    }
+  })})`);
+
+  assert.equal(harness.calls.badgeColor.at(-1).color, CodexCapacityMonitor.BADGE_COLORS.red);
+  assert.equal(harness.calls.badgeTextColor.at(-1).color, "#ffffff");
 });
 
 test("startup seeds capacity state from a confirmed cached snapshot without alerting", async () => {

@@ -144,6 +144,44 @@ test("badge follows the lowest actually available percentage", () => {
   assert.equal(weeklyOnly.visual.counter.key, "codexWeekly");
 });
 
+test("badge colors follow the same percentage levels as the usage ring with accessible text", () => {
+  const cases = [
+    { percent: 73, level: "green", textColor: "#000000" },
+    { percent: 51, level: "green", textColor: "#000000" },
+    { percent: 50, level: "amber", textColor: "#000000" },
+    { percent: 15, level: "amber", textColor: "#000000" },
+    { percent: 14, level: "red", textColor: "#ffffff" },
+    { percent: 0, level: "red", textColor: "#ffffff" }
+  ];
+
+  for (const { percent, level, textColor } of cases) {
+    const visual = CodexCapacityMonitor.evaluateSnapshot(
+      snapshot({ codexWeekly: percent }),
+      null,
+      {}
+    ).visual;
+    assert.equal(CodexCapacityMonitor.classifyUsageLevel(percent), level);
+    assert.equal(visual.badgeColor, CodexCapacityMonitor.BADGE_COLORS[level]);
+    assert.equal(visual.badgeTextColor, textColor);
+    assert.ok(contrastRatio(visual.badgeColor, visual.badgeTextColor) >= 4.5);
+  }
+});
+
+function contrastRatio(firstColor, secondColor) {
+  const luminance = (color) => {
+    const channels = color.slice(1).match(/.{2}/g).map((channel) => {
+      const value = Number.parseInt(channel, 16) / 255;
+      return value <= 0.04045
+        ? value / 12.92
+        : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const first = luminance(firstColor);
+  const second = luminance(secondColor);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
 test("disabled permanent percentage still exposes warning and critical badges", () => {
   const normal = CodexCapacityMonitor.evaluateSnapshot(
     snapshot({ codexWeekly: 73 }),

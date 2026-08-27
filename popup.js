@@ -271,7 +271,7 @@
       ? Math.max(0, Math.min(100, structured.remainingPercent))
       : null;
     const usageLevel = hasRemainingPercent
-      ? ChatGPTUsageModel.getUsageLevel(remainingPercent) || "green"
+      ? CodexCapacityMonitor.classifyUsageLevel(remainingPercent)
       : null;
     if (hasRemainingPercent) {
       card.classList.add("percentage-metric", `usage-${usageLevel}`);

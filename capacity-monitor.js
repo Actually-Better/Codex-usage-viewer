@@ -19,11 +19,9 @@
   ]);
   const SEVERITY = Object.freeze({ normal: 0, preventive: 1, warning: 2, critical: 3, exhausted: 4 });
   const BADGE_COLORS = Object.freeze({
-    normal: "#15803d",
-    preventive: "#b45309",
-    warning: "#d97706",
-    critical: "#b91c1c",
-    exhausted: "#991b1b"
+    green: "#16a34a",
+    amber: "#f59e0b",
+    red: "#dc2626"
   });
 
   function normalizeSettings(raw) {
@@ -142,9 +140,11 @@
       ? availableCounters.filter((counter) => normalizePercent(counter && counter.remainingPercent) !== null)
       : [];
     if (!available.length) {
+      const badgeColor = BADGE_COLORS.green;
       return {
         badgeText: "",
-        badgeColor: BADGE_COLORS.normal,
+        badgeColor,
+        badgeTextColor: getContrastingTextColor(badgeColor),
         counter: null,
         state: "normal",
         title: "Codex Usage Viewer — usage unavailable"
@@ -154,12 +154,15 @@
       candidate.remainingPercent < selected.remainingPercent ? candidate : selected
     ));
     const state = classifyRemaining(worst.remainingPercent, settings);
+    const badgeLevel = classifyUsageLevel(worst.remainingPercent);
+    const badgeColor = BADGE_COLORS[badgeLevel];
     const showTemporaryWarning = SEVERITY[state] >= SEVERITY.warning;
     return {
       badgeText: settings.showRemainingPercentage || showTemporaryWarning
         ? String(Math.round(worst.remainingPercent))
         : "",
-      badgeColor: BADGE_COLORS[state],
+      badgeColor,
+      badgeTextColor: getContrastingTextColor(badgeColor),
       counter: worst,
       state,
       title: `Codex Usage Viewer — ${worst.label}: ${worst.remainingPercent}% remaining`
@@ -175,6 +178,39 @@
     if (value <= settings.lowThreshold) return "warning";
     if (value <= PREVENTIVE_THRESHOLD) return "preventive";
     return "normal";
+  }
+
+  function classifyUsageLevel(remainingPercent) {
+    const value = normalizePercent(remainingPercent);
+    if (value === null) return "green";
+    if (value < 15) return "red";
+    if (value <= 50) return "amber";
+    return "green";
+  }
+
+  function getContrastingTextColor(backgroundColor) {
+    const backgroundLuminance = relativeLuminance(backgroundColor);
+    const whiteContrast = contrastRatio(backgroundLuminance, 1);
+    const blackContrast = contrastRatio(backgroundLuminance, 0);
+    return whiteContrast >= blackContrast ? "#ffffff" : "#000000";
+  }
+
+  function relativeLuminance(color) {
+    const match = /^#([0-9a-f]{6})$/i.exec(String(color));
+    if (!match) return 0;
+    const channels = match[1].match(/.{2}/g).map((channel) => {
+      const value = Number.parseInt(channel, 16) / 255;
+      return value <= 0.04045
+        ? value / 12.92
+        : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  }
+
+  function contrastRatio(firstLuminance, secondLuminance) {
+    const lighter = Math.max(firstLuminance, secondLuminance);
+    const darker = Math.min(firstLuminance, secondLuminance);
+    return (lighter + 0.05) / (darker + 0.05);
   }
 
   function buildNotification(event) {
@@ -251,6 +287,7 @@
     PREVENTIVE_THRESHOLD,
     buildNotification,
     classifyRemaining,
+    classifyUsageLevel,
     deriveVisualState,
     detectTransition,
     evaluateSnapshot,
