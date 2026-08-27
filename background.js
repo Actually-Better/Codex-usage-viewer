@@ -39,6 +39,11 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(() => refreshOnStartup().catch(() => {}));
 
+chrome.windows.onCreated.addListener(
+  () => refreshIfStale("window-created").catch(() => {}),
+  { windowTypes: ["normal"] }
+);
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === refreshAlarmName) {
     refreshWithTimeout("alarm").catch(() => {});
@@ -195,6 +200,7 @@ async function getPopupState() {
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
+  refreshIfStale("popup-open", nextState).catch(() => {});
   return { ok: true, state: nextState };
 }
 
@@ -205,14 +211,22 @@ async function refreshForPopup() {
 async function refreshOnStartup(now = Date.now()) {
   await ensureRefreshAlarm();
   await initializeCapacityUi();
-  const data = await chrome.storage.local.get([storageKeys.state]);
-  if (!shouldRefreshOnStartup(data[storageKeys.state], now)) {
-    return { ok: true, skipped: true, reason: "Usage data is still recent." };
-  }
-  return refreshWithTimeout("startup");
+  return refreshIfStale("startup", null, now);
 }
 
-function shouldRefreshOnStartup(state, now = Date.now()) {
+async function refreshIfStale(reason, state = null, now = Date.now()) {
+  let currentState = state;
+  if (!currentState) {
+    const data = await chrome.storage.local.get([storageKeys.state]);
+    currentState = data[storageKeys.state];
+  }
+  if (!shouldRefreshUsage(currentState, now)) {
+    return { ok: true, skipped: true, reason: "Usage data is still recent." };
+  }
+  return refreshWithTimeout(reason);
+}
+
+function shouldRefreshUsage(state, now = Date.now()) {
   const collectedAt = Date.parse(state && (state.dataCollectedAt || state.lastRefreshAt));
   const maxAgeMs = refreshPeriodMinutes * 60 * 1000;
   return !Number.isFinite(collectedAt)
