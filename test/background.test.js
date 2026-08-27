@@ -97,6 +97,12 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         calls.windowUpdate += 1;
         calls.windowUpdateArgs.push({ windowId, ...args });
         return { id: windowId, ...args };
+      },
+      onCreated: {
+        addListener(listener, filters) {
+          listeners.windowCreated = listener;
+          listeners.windowCreatedFilters = filters;
+        }
       }
     },
     tabs: {
@@ -283,6 +289,92 @@ test("browser startup skips the refresh when collected usage is still recent", a
 
   assert.equal(result.skipped, true);
   assert.deepEqual(Array.from(harness.context.startupRefreshReasons), []);
+});
+
+test("opening a normal browser window refreshes stale usage", async () => {
+  const staleAt = new Date(
+    Date.now() - ChatGPTUsageConfig.refreshPeriodMinutes * 60 * 1000
+  ).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: staleAt, lastRefreshAt: staleAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.windowRefreshReasons = [];
+  harness.context.fakeWindowRefresh = async (reason) => {
+    harness.context.windowRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakeWindowRefresh");
+
+  await harness.listeners.windowCreated({ id: 7, type: "normal" });
+
+  assert.deepEqual(
+    Array.from(harness.listeners.windowCreatedFilters.windowTypes),
+    ["normal"]
+  );
+  assert.deepEqual(Array.from(harness.context.windowRefreshReasons), ["window-created"]);
+});
+
+test("opening a normal browser window skips recent usage", async () => {
+  const recentAt = new Date(Date.now() - 60 * 1000).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: recentAt, lastRefreshAt: recentAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.windowRefreshReasons = [];
+  harness.context.fakeWindowRefresh = async (reason) => {
+    harness.context.windowRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakeWindowRefresh");
+
+  const result = await harness.listeners.windowCreated({ id: 7, type: "normal" });
+
+  assert.equal(result.skipped, true);
+  assert.deepEqual(Array.from(harness.context.windowRefreshReasons), []);
+});
+
+test("opening the popup returns cached state and refreshes stale usage", async () => {
+  const staleAt = new Date(
+    Date.now() - ChatGPTUsageConfig.refreshPeriodMinutes * 60 * 1000
+  ).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: staleAt, lastRefreshAt: staleAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.popupOpenRefreshReasons = [];
+  harness.context.fakePopupOpenRefresh = async (reason) => {
+    harness.context.popupOpenRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakePopupOpenRefresh");
+
+  const result = await harness.run("getPopupState()");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state.dataCollectedAt, staleAt);
+  assert.deepEqual(Array.from(harness.context.popupOpenRefreshReasons), ["popup-open"]);
+});
+
+test("opening the popup skips the refresh when usage is recent", async () => {
+  const recentAt = new Date(Date.now() - 60 * 1000).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: recentAt, lastRefreshAt: recentAt }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.popupOpenRefreshReasons = [];
+  harness.context.fakePopupOpenRefresh = async (reason) => {
+    harness.context.popupOpenRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakePopupOpenRefresh");
+
+  const result = await harness.run("getPopupState()");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(harness.context.popupOpenRefreshReasons), []);
 });
 
 test("scheduled checks use the same bounded refresh wrapper as the popup", async () => {
