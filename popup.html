@@ -383,6 +383,31 @@
         accent-color: var(--accent-strong);
       }
 
+      .refresh-setting {
+        display: grid;
+        gap: 5px;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .refresh-setting-label {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .refresh-setting output {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .refresh-setting input[type="range"] {
+        width: 100%;
+        margin: 0;
+        accent-color: var(--accent-strong);
+      }
+
       .threshold-settings {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -579,6 +604,13 @@
       <details id="capacitySettings" class="settings">
         <summary>Settings</summary>
         <div class="settings-list">
+          <div class="refresh-setting">
+            <div class="refresh-setting-label">
+              <label for="refreshPeriodMinutes">Automatic refresh</label>
+              <output id="refreshPeriodValue" for="refreshPeriodMinutes">15 minutes</output>
+            </div>
+            <input id="refreshPeriodMinutes" type="range" min="1" max="60" step="1" value="15" aria-valuetext="15 minutes">
+          </div>
           <label class="setting-row" for="enableNotifications">
             <span>Enable notifications</span>
             <input id="enableNotifications" type="checkbox">

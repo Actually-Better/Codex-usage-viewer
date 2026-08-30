@@ -9,6 +9,8 @@
   const statusAge = document.getElementById("statusAge");
   const warningBox = document.getElementById("warningBox");
   const settingsStatus = document.getElementById("settingsStatus");
+  const refreshPeriodInput = document.getElementById("refreshPeriodMinutes");
+  const refreshPeriodValue = document.getElementById("refreshPeriodValue");
   const capacitySettingInputs = {
     enableNotifications: document.getElementById("enableNotifications"),
     notifyOnReset: document.getElementById("notifyOnReset"),
@@ -30,6 +32,12 @@
       });
     });
   }
+  refreshPeriodInput.addEventListener("input", previewRefreshPeriod);
+  refreshPeriodInput.addEventListener("change", () => {
+    saveRefreshPeriod().catch(() => {
+      settingsStatus.textContent = "Could not save settings. Reload the extension and try again.";
+    });
+  });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
@@ -37,13 +45,15 @@
     if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
     const settingsChange = changes[ChatGPTUsageConfig.storageKeys.capacitySettings];
     if (settingsChange) applyCapacitySettings(settingsChange.newValue);
+    const refreshPeriodChange = changes[ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes];
+    if (refreshPeriodChange) applyRefreshPeriod(refreshPeriodChange.newValue);
   });
   initializePopup();
   setInterval(updateRefreshAge, 30000);
 
   async function initializePopup() {
     renderLoading();
-    await Promise.all([loadCapacitySettings(), loadCachedState()]);
+    await Promise.all([loadCapacitySettings(), loadRefreshPeriod(), loadCachedState()]);
   }
 
   async function loadCachedState() {
@@ -55,6 +65,44 @@
     const key = ChatGPTUsageConfig.storageKeys.capacitySettings;
     const stored = await chrome.storage.local.get([key]);
     applyCapacitySettings(stored[key]);
+  }
+
+  async function loadRefreshPeriod() {
+    const key = ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes;
+    const stored = await chrome.storage.local.get([key]);
+    applyRefreshPeriod(stored[key]);
+  }
+
+  function applyRefreshPeriod(value) {
+    const refreshPeriodMinutes = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(value);
+    refreshPeriodInput.value = String(refreshPeriodMinutes);
+    refreshPeriodInput.setAttribute(
+      "aria-valuetext",
+      formatRefreshPeriod(refreshPeriodMinutes)
+    );
+    refreshPeriodValue.textContent = formatRefreshPeriod(refreshPeriodMinutes);
+  }
+
+  function previewRefreshPeriod() {
+    applyRefreshPeriod(refreshPeriodInput.value);
+  }
+
+  function formatRefreshPeriod(minutes) {
+    if (minutes === 1) return "1 minute";
+    if (minutes === 60) return "1 hour";
+    return `${minutes} minutes`;
+  }
+
+  async function saveRefreshPeriod() {
+    const refreshPeriodMinutes = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(
+      refreshPeriodInput.value
+    );
+    applyRefreshPeriod(refreshPeriodMinutes);
+    settingsStatus.textContent = "Saving locally...";
+    await chrome.storage.local.set({
+      [ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes]: refreshPeriodMinutes
+    });
+    settingsStatus.textContent = "";
   }
 
   function applyCapacitySettings(rawSettings) {

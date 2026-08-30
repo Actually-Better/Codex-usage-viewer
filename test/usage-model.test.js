@@ -12,6 +12,22 @@ test("configuration provides the retained sign-in tab key", () => {
   );
 });
 
+test("refresh interval supports every whole minute from 1 to 60 and defaults to 15", () => {
+  assert.equal(
+    ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes,
+    "chatgptUsageMonitor.refreshPeriodMinutes"
+  );
+  assert.equal(ChatGPTUsageConfig.refreshPeriodMinimumMinutes, 1);
+  assert.equal(ChatGPTUsageConfig.refreshPeriodMaximumMinutes, 60);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(undefined), 15);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(null), 15);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes("5"), 5);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(23), 23);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(60), 60);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(0), 1);
+  assert.equal(ChatGPTUsageModel.normalizeRefreshPeriodMinutes(61), 60);
+});
+
 test("formatRelativeTime presents friendly refresh ages", () => {
   const now = Date.parse("2026-08-24T12:00:00.000Z");
   assert.equal(ChatGPTUsageModel.formatRelativeTime("2026-08-24T11:59:40.000Z", now), "just now");

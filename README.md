@@ -32,6 +32,7 @@ Recommended screenshots:
 - Treats Weekly usage as the primary limit and 5-hour usage as optional; a missing or invalid 5-hour value is ignored rather than converted to 0%.
 - Shows the lowest actually available percentage on the toolbar icon when enabled.
 - Supports native reset/low/critical notifications and optional local alert sounds.
+- Lets the user choose any automatic-refresh interval from 1 to 60 minutes, with 15 minutes as the default.
 - Stores only local metadata in `chrome.storage.local`.
 
 ## Privacy
@@ -64,7 +65,7 @@ When exact usage is not visible, the extension will show it as unavailable rathe
 - It does not infer hidden limits, account entitlements, or exact reset behavior.
 - Browser and account A/B tests can make values unavailable.
 - Diagnostics are intentionally redacted and do not include raw page text.
-- Background alerts are only as current as successful visible Analytics reads. The extension checks every 15 minutes and does not poll private endpoints or invent intermediate values.
+- Background alerts are only as current as successful visible Analytics reads. The extension checks at the locally configured interval (15 minutes by default) and does not poll private endpoints or invent intermediate values.
 - If a scheduled read requires sign-in or returns no reliable percentage, no threshold notification is generated from that failed read.
 
 ## Compatibility
@@ -75,7 +76,7 @@ When exact usage is not visible, the extension will show it as unavailable rathe
 
 ### Extension permissions
 
-- `alarms`: run the existing 15-minute background refresh.
+- `alarms`: run the configurable background refresh (15 minutes by default).
 - `storage`: persist derived usage, threshold crossings, and local settings.
 - `notifications`: show reset, low-capacity, critical, and exhausted alerts.
 - `offscreen`: play a short local tone only when **Enable sounds** is turned on. The audio document uses the `AUDIO_PLAYBACK` reason and is not used to keep the service worker alive.

@@ -6,11 +6,14 @@
       state: "chatgptUsageMonitor.state",
       counters: "chatgptUsageMonitor.counters",
       retainedSignInTab: "chatgptUsageMonitor.retainedSignInTab",
+      refreshPeriodMinutes: "chatgptUsageMonitor.refreshPeriodMinutes",
       capacitySettings: "chatgptUsageMonitor.capacitySettings",
       capacityState: "chatgptUsageMonitor.capacityState"
     },
     refreshAlarmName: "chatgpt-usage-monitor-refresh",
     refreshPeriodMinutes: 15,
+    refreshPeriodMinimumMinutes: 1,
+    refreshPeriodMaximumMinutes: 60,
     counterRetentionDays: 14
   };
 
@@ -65,6 +68,18 @@
     const elapsedDays = Math.floor(elapsedHours / 24);
     if (elapsedDays < 7) return `${elapsedDays} d ago`;
     return formatTime(timestamp);
+  }
+
+  function normalizeRefreshPeriodMinutes(value) {
+    if (value === null || value === undefined || value === "") {
+      return CONFIG.refreshPeriodMinutes;
+    }
+    const period = Number(value);
+    if (!Number.isFinite(period)) return CONFIG.refreshPeriodMinutes;
+    return Math.min(
+      CONFIG.refreshPeriodMaximumMinutes,
+      Math.max(CONFIG.refreshPeriodMinimumMinutes, Math.round(period))
+    );
   }
 
   function defaultCounters(now = Date.now()) {
@@ -600,6 +615,7 @@
     hasVisibleUsage,
     matchesUsageTerms,
     normalizeCounters,
+    normalizeRefreshPeriodMinutes,
     normalizeMetricField,
     parseCodexUsageText,
     summarizeAvailability

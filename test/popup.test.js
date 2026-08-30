@@ -107,6 +107,17 @@ test("capacity settings expose accessible persisted controls", () => {
   assert.match(popupSource, /CodexCapacityMonitor\.normalizeSettings/);
 });
 
+test("settings expose a progressive automatic refresh slider with a 15-minute default", () => {
+  assert.match(popupHtml, /<label for="refreshPeriodMinutes">Automatic refresh<\/label>/);
+  assert.match(popupHtml, /<output id="refreshPeriodValue" for="refreshPeriodMinutes">15 minutes<\/output>/);
+  assert.match(popupHtml, /<input id="refreshPeriodMinutes" type="range" min="1" max="60" step="1" value="15"/);
+  assert.doesNotMatch(popupHtml, /<select id="refreshPeriodMinutes">/);
+  assert.match(popupSource, /storageKeys\.refreshPeriodMinutes/);
+  assert.match(popupSource, /normalizeRefreshPeriodMinutes/);
+  assert.match(popupSource, /addEventListener\("input", previewRefreshPeriod\)/);
+  assert.match(popupSource, /setAttribute\(\s*"aria-valuetext"/s);
+});
+
 test("manifest requests only the APIs required by capacity alerts", () => {
   assert.deepEqual(manifest.permissions, ["alarms", "notifications", "offscreen", "storage"]);
   assert.match(offscreenSource, /message\.type !== "capacity:playSound"/);

@@ -1,6 +1,10 @@
 importScripts("usage-model.js", "capacity-monitor.js");
 
-const { storageKeys, refreshAlarmName, refreshPeriodMinutes } = ChatGPTUsageConfig;
+const {
+  storageKeys,
+  refreshAlarmName,
+  refreshPeriodMinutes: defaultRefreshPeriodMinutes
+} = ChatGPTUsageConfig;
 const CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics";
 const ANALYTICS_LOAD_TIMEOUT_MS = 8000;
 const ANALYTICS_READ_ATTEMPTS = 25;
@@ -67,8 +71,13 @@ initializeCapacityUi().catch(() => {});
 
 if (chrome.storage.onChanged && chrome.storage.onChanged.addListener) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local" || !changes[storageKeys.capacitySettings]) return;
-    handleCapacitySettingsChanged(changes[storageKeys.capacitySettings].newValue).catch(() => {});
+    if (areaName !== "local") return;
+    if (changes[storageKeys.capacitySettings]) {
+      handleCapacitySettingsChanged(changes[storageKeys.capacitySettings].newValue).catch(() => {});
+    }
+    if (changes[storageKeys.refreshPeriodMinutes]) {
+      handleRefreshPeriodChanged(changes[storageKeys.refreshPeriodMinutes].newValue).catch(() => {});
+    }
   });
 }
 
@@ -216,19 +225,26 @@ async function refreshOnStartup(now = Date.now()) {
 
 async function refreshIfStale(reason, state = null, now = Date.now()) {
   let currentState = state;
-  if (!currentState) {
-    const data = await chrome.storage.local.get([storageKeys.state]);
-    currentState = data[storageKeys.state];
-  }
-  if (!shouldRefreshUsage(currentState, now)) {
+  const keys = [storageKeys.refreshPeriodMinutes];
+  if (!currentState) keys.push(storageKeys.state);
+  const data = await chrome.storage.local.get(keys);
+  if (!currentState) currentState = data[storageKeys.state];
+  const refreshPeriodMinutes = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(
+    data[storageKeys.refreshPeriodMinutes]
+  );
+  if (!shouldRefreshUsage(currentState, now, refreshPeriodMinutes)) {
     return { ok: true, skipped: true, reason: "Usage data is still recent." };
   }
   return refreshWithTimeout(reason);
 }
 
-function shouldRefreshUsage(state, now = Date.now()) {
+function shouldRefreshUsage(
+  state,
+  now = Date.now(),
+  refreshPeriodMinutes = defaultRefreshPeriodMinutes
+) {
   const collectedAt = Date.parse(state && (state.dataCollectedAt || state.lastRefreshAt));
-  const maxAgeMs = refreshPeriodMinutes * 60 * 1000;
+  const maxAgeMs = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(refreshPeriodMinutes) * 60 * 1000;
   return !Number.isFinite(collectedAt)
     || !Number.isFinite(now)
     || now < collectedAt
@@ -1274,10 +1290,25 @@ async function waitForTabReadyOrDelay(tabId) {
 }
 
 async function ensureRefreshAlarm() {
+  const data = await chrome.storage.local.get([storageKeys.refreshPeriodMinutes]);
+  const refreshPeriodMinutes = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(
+    data[storageKeys.refreshPeriodMinutes]
+  );
   const existing = await chrome.alarms.get(refreshAlarmName);
-  if (existing) return;
+  if (existing && (
+    !Number.isFinite(existing.periodInMinutes)
+    || existing.periodInMinutes === refreshPeriodMinutes
+  )) return;
   await chrome.alarms.create(refreshAlarmName, {
     delayInMinutes: 1,
+    periodInMinutes: refreshPeriodMinutes
+  });
+}
+
+async function handleRefreshPeriodChanged(value) {
+  const refreshPeriodMinutes = ChatGPTUsageModel.normalizeRefreshPeriodMinutes(value);
+  await chrome.alarms.create(refreshAlarmName, {
+    delayInMinutes: refreshPeriodMinutes,
     periodInMinutes: refreshPeriodMinutes
   });
 }

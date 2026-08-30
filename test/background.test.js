@@ -8,11 +8,12 @@ const { ChatGPTUsageConfig, ChatGPTUsageModel } = require("../usage-model.js");
 const { CodexCapacityMonitor } = require("../capacity-monitor.js");
 const backgroundSource = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 
-function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false, blockCapacityInitialization = false, callbackOnlyNotificationClear = false } = {}) {
+function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null, createError = null, initialState = {}, existingAlarm = true, retainedSignInTabId = null, localRetainedSignInTabId = null, refreshPeriodMinutes = null, capacitySettings = null, capacityState = null, enableCustomActionIcon = false, blockCapacityInitialization = false, callbackOnlyNotificationClear = false } = {}) {
   const storage = {
     [ChatGPTUsageConfig.storageKeys.state]: initialState,
     [ChatGPTUsageConfig.storageKeys.counters]: ChatGPTUsageModel.defaultCounters(1),
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: localRetainedSignInTabId,
+    [ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes]: refreshPeriodMinutes,
     [ChatGPTUsageConfig.storageKeys.capacitySettings]: capacitySettings,
     [ChatGPTUsageConfig.storageKeys.capacityState]: capacityState
   };
@@ -90,7 +91,8 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
         async set(values) {
           Object.assign(sessionStorage, values);
         }
-      }
+      },
+      onChanged: { addListener(listener) { listeners.storageChanged = listener; } }
     },
     windows: {
       async update(windowId, args) {
@@ -258,6 +260,23 @@ test("background worker startup repairs a missing periodic alarm", async () => {
   }]);
 });
 
+test("changing the refresh interval reprograms the periodic alarm", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  harness.listeners.storageChanged({
+    [ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes]: { newValue: 23 }
+  }, "local");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.calls.alarmCreate, 1);
+  assert.deepEqual(harness.calls.alarmCreateArgs[0], {
+    name: ChatGPTUsageConfig.refreshAlarmName,
+    delayInMinutes: 23,
+    periodInMinutes: 23
+  });
+});
+
 test("browser startup refreshes usage when the stored data is stale", async () => {
   const staleAt = new Date(
     Date.now() - ChatGPTUsageConfig.refreshPeriodMinutes * 60 * 1000
@@ -338,6 +357,31 @@ test("opening a normal browser window skips recent usage", async () => {
 
   assert.equal(result.skipped, true);
   assert.deepEqual(Array.from(harness.context.windowRefreshReasons), []);
+});
+
+test("stale checks honor the persisted refresh interval", async () => {
+  const collectedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const harness = createBackgroundHarness({
+    initialState: { dataCollectedAt: collectedAt, lastRefreshAt: collectedAt },
+    refreshPeriodMinutes: 60
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.context.customIntervalRefreshReasons = [];
+  harness.context.fakeCustomIntervalRefresh = async (reason) => {
+    harness.context.customIntervalRefreshReasons.push(reason);
+    return { ok: true };
+  };
+  harness.run("refreshWithTimeout = fakeCustomIntervalRefresh");
+
+  const result = await harness.listeners.windowCreated({ id: 7, type: "normal" });
+
+  assert.equal(result.skipped, true);
+  assert.deepEqual(Array.from(harness.context.customIntervalRefreshReasons), []);
+  assert.equal(harness.run(`shouldRefreshUsage(
+    { dataCollectedAt: ${JSON.stringify(collectedAt)} },
+    Date.now(),
+    5
+  )`), true);
 });
 
 test("opening the popup returns cached state and refreshes stale usage", async () => {
