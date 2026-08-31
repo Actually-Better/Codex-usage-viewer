@@ -1,14 +1,35 @@
-name: Notify PR status and reviews
+name: Notify all PR activity
 
 on:
   pull_request_target:
-    types: [closed]
+    types:
+      - assigned
+      - unassigned
+      - labeled
+      - unlabeled
+      - opened
+      - edited
+      - closed
+      - reopened
+      - synchronize
+      - converted_to_draft
+      - locked
+      - unlocked
+      - enqueued
+      - dequeued
+      - milestoned
+      - demilestoned
+      - ready_for_review
+      - review_requested
+      - review_request_removed
+      - auto_merge_enabled
+      - auto_merge_disabled
   pull_request_review:
-    types: [submitted]
+    types: [submitted, edited, dismissed]
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited, deleted]
   issue_comment:
-    types: [created]
+    types: [created, edited, deleted]
 
 permissions:
   issues: write
@@ -28,66 +49,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          is_positive_message() {
-            local message="$1"
-
-            if [[ "$message" == *"👍"* || "$message" == *"👀"* ]]; then
-              return 0
-            fi
-
-            printf '%s' "$message" |
-              grep -Eiq '(^|[^[:alnum:]_])(lgtm|looks good( to me)?|all good|everything looks good|no issues( found)?|no findings|no blocking issues|all checks (have )?passed|todo (está |esta )?bien|sin (problemas|observaciones|hallazgos|bloqueos)|ning[uú]n problema)([^[:alnum:]_]|$)'
-          }
+          action="$(jq -r '.action' "$GITHUB_EVENT_PATH")"
+          actor="$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")"
 
           case "$EVENT_NAME" in
-            pull_request_target)
+            pull_request_target|pull_request_review|pull_request_review_comment)
               pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
               pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
               pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
-              actor="$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")"
-              merged="$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")"
-
-              if [[ "$merged" == "true" ]]; then
-                icon="✅"
-                message="@$actor ha fusionado el PR"
-              else
-                icon="⛔"
-                message="@$actor ha cerrado sin fusionar el PR"
-              fi
-              ;;
-
-            pull_request_review)
-              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
-              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
-              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
-              actor="$(jq -r '.review.user.login' "$GITHUB_EVENT_PATH")"
-              review_state="$(jq -r '.review.state | ascii_downcase' "$GITHUB_EVENT_PATH")"
-              review_body="$(jq -r '.review.body // ""' "$GITHUB_EVENT_PATH")"
-
-              if [[ "$review_state" == "approved" ]]; then
-                icon="✅"
-                message="@$actor ha aprobado el PR"
-              elif [[ "$review_state" == "commented" ]] && is_positive_message "$review_body"; then
-                icon="👍"
-                message="@$actor ha indicado que la revisión está correcta en el PR"
-              else
-                exit 0
-              fi
-              ;;
-
-            pull_request_review_comment)
-              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
-              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
-              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
-              actor="$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")"
-              comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-
-              if ! is_positive_message "$comment_body"; then
-                exit 0
-              fi
-
-              icon="👍"
-              message="@$actor ha publicado una respuesta positiva de revisión en el PR"
               ;;
 
             issue_comment)
@@ -95,22 +64,106 @@ jobs:
                 exit 0
               fi
 
-              pr_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
-              pr_title="$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")"
-              pr_url="$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")"
-              actor="$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")"
-              comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-
-              if [[ "$actor" == "github-actions[bot]" ]] || ! is_positive_message "$comment_body"; then
+              if jq -e '(.comment.body // "") | contains("<!-- actually-better-pr-notification -->")' "$GITHUB_EVENT_PATH" >/dev/null; then
                 exit 0
               fi
 
-              icon="👍"
-              message="@$actor ha indicado que todo está bien en el PR"
+              pr_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")"
               ;;
 
             *)
               exit 0
+              ;;
+          esac
+
+          icon="🔔"
+
+          case "$EVENT_NAME:$action" in
+            pull_request_target:opened)
+              message="@$actor ha abierto el PR"
+              ;;
+            pull_request_target:closed)
+              if [[ "$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")" == "true" ]]; then
+                icon="✅"
+                message="@$actor ha fusionado el PR"
+              else
+                icon="⛔"
+                message="@$actor ha cerrado sin fusionar el PR"
+              fi
+              ;;
+            pull_request_target:reopened)
+              message="@$actor ha reabierto el PR"
+              ;;
+            pull_request_target:synchronize)
+              message="@$actor ha añadido nuevos commits al PR"
+              ;;
+            pull_request_target:edited)
+              message="@$actor ha editado el PR"
+              ;;
+            pull_request_target:ready_for_review)
+              message="@$actor ha marcado el PR como listo para revisión"
+              ;;
+            pull_request_target:converted_to_draft)
+              message="@$actor ha convertido el PR en borrador"
+              ;;
+            pull_request_target:review_requested)
+              message="@$actor ha solicitado una revisión en el PR"
+              ;;
+            pull_request_target:review_request_removed)
+              message="@$actor ha retirado una solicitud de revisión del PR"
+              ;;
+            pull_request_target:labeled)
+              label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
+              message="@$actor ha añadido la etiqueta '$label' al PR"
+              ;;
+            pull_request_target:unlabeled)
+              label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
+              message="@$actor ha retirado la etiqueta '$label' del PR"
+              ;;
+            pull_request_review:submitted)
+              state="$(jq -r '.review.state | ascii_downcase' "$GITHUB_EVENT_PATH")"
+              case "$state" in
+                approved)
+                  icon="✅"
+                  message="@$actor ha aprobado el PR"
+                  ;;
+                changes_requested)
+                  icon="⚠️"
+                  message="@$actor ha solicitado cambios en el PR"
+                  ;;
+                *)
+                  message="@$actor ha enviado una revisión del PR"
+                  ;;
+              esac
+              ;;
+            pull_request_review:edited)
+              message="@$actor ha editado una revisión del PR"
+              ;;
+            pull_request_review:dismissed)
+              message="@$actor ha descartado una revisión del PR"
+              ;;
+            pull_request_review_comment:created)
+              message="@$actor ha añadido un comentario de revisión al PR"
+              ;;
+            pull_request_review_comment:edited)
+              message="@$actor ha editado un comentario de revisión del PR"
+              ;;
+            pull_request_review_comment:deleted)
+              message="@$actor ha eliminado un comentario de revisión del PR"
+              ;;
+            issue_comment:created)
+              message="@$actor ha comentado en el PR"
+              ;;
+            issue_comment:edited)
+              message="@$actor ha editado un comentario del PR"
+              ;;
+            issue_comment:deleted)
+              message="@$actor ha eliminado un comentario del PR"
+              ;;
+            *)
+              message="@$actor ha realizado la acción '$action' en el PR"
               ;;
           esac
 
