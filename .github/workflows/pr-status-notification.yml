@@ -78,7 +78,6 @@ jobs:
               ;;
           esac
 
-          pr_url="$GITHUB_SERVER_URL/$GH_REPO/pull/$pr_number"
           icon="🔔"
 
           case "$EVENT_NAME:$action" in
@@ -168,6 +167,6 @@ jobs:
               ;;
           esac
 
-          body="<!-- actually-better-pr-notification --> $icon @ramirogh, $message #$pr_number. [Abrir PR]($pr_url)"
+          body="<!-- actually-better-pr-notification --> $icon @ramirogh, $message #$pr_number."
 
           gh api             --method POST             "repos/$GH_REPO/issues/$pr_number/comments"             -f body="$body"
