@@ -1,4 +1,4 @@
-name: Notify all PR activity
+name: Notify PR activity
 
 on:
   pull_request_target:
@@ -36,7 +36,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-notification-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}-${{ github.event.action }}
+  group: pr-notification-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
@@ -52,17 +52,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          action="$(jq -r '.action' "$GITHUB_EVENT_PATH")"
-          actor="$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")"
-
-          if [[ "$actor" == "vercel[bot]" || "$actor" == "supabase[bot]" ]]; then
-            exit 0
-          fi
-
-          if [[ "$actor" == "ramirogh" && "$EVENT_NAME" == "issue_comment" && "$action" == "created" ]]; then
-            exit 0
-          fi
 
           case "$EVENT_NAME" in
             pull_request_target|pull_request_review|pull_request_review_comment)
@@ -86,114 +75,14 @@ jobs:
               ;;
           esac
 
-          icon="🔔"
-          dedupe_detail=""
-
-          case "$EVENT_NAME:$action" in
-            pull_request_target:opened)
-              message="$actor ha abierto el PR"
-              ;;
-            pull_request_target:closed)
-              if [[ "$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")" == "true" ]]; then
-                icon="✅"
-                dedupe_detail="merged"
-                message="$actor ha fusionado el PR"
-              else
-                icon="⛔"
-                dedupe_detail="closed"
-                message="$actor ha cerrado sin fusionar el PR"
-              fi
-              ;;
-            pull_request_target:reopened)
-              message="$actor ha reabierto el PR"
-              ;;
-            pull_request_target:synchronize)
-              message="$actor ha añadido nuevos commits al PR"
-              ;;
-            pull_request_target:edited)
-              message="$actor ha editado el PR"
-              ;;
-            pull_request_target:ready_for_review)
-              message="$actor ha marcado el PR como listo para revisión"
-              ;;
-            pull_request_target:converted_to_draft)
-              message="$actor ha convertido el PR en borrador"
-              ;;
-            pull_request_target:review_requested)
-              message="$actor ha solicitado una revisión en el PR"
-              ;;
-            pull_request_target:review_request_removed)
-              message="$actor ha retirado una solicitud de revisión del PR"
-              ;;
-            pull_request_target:labeled)
-              label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
-              dedupe_detail="$label"
-              message="$actor ha añadido la etiqueta '$label' al PR"
-              ;;
-            pull_request_target:unlabeled)
-              label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
-              dedupe_detail="$label"
-              message="$actor ha retirado la etiqueta '$label' del PR"
-              ;;
-            pull_request_review:submitted)
-              state="$(jq -r '.review.state | ascii_downcase' "$GITHUB_EVENT_PATH")"
-              dedupe_detail="$state"
-              case "$state" in
-                approved)
-                  icon="✅"
-                  message="$actor ha aprobado el PR"
-                  ;;
-                changes_requested)
-                  icon="⚠️"
-                  message="$actor ha solicitado cambios en el PR"
-                  ;;
-                *)
-                  message="$actor ha enviado una revisión del PR"
-                  ;;
-              esac
-              ;;
-            pull_request_review:edited)
-              message="$actor ha editado una revisión del PR"
-              ;;
-            pull_request_review:dismissed)
-              message="$actor ha descartado una revisión del PR"
-              ;;
-            pull_request_review_comment:created)
-              message="$actor ha añadido un comentario de revisión al PR"
-              ;;
-            pull_request_review_comment:edited)
-              message="$actor ha editado un comentario de revisión del PR"
-              ;;
-            pull_request_review_comment:deleted)
-              message="$actor ha eliminado un comentario de revisión del PR"
-              ;;
-            issue_comment:created)
-              message="$actor ha comentado en el PR"
-              ;;
-            issue_comment:edited)
-              message="$actor ha editado un comentario del PR"
-              ;;
-            issue_comment:deleted)
-              message="$actor ha eliminado un comentario del PR"
-              ;;
-            *)
-              message="$actor ha realizado la acción '$action' en el PR"
-              ;;
-          esac
-
-          dedupe_key="$(
-            printf '%s' "$EVENT_NAME|$action|$dedupe_detail" \
-              | sha256sum \
-              | awk '{print $1}'
-          )"
-          marker="<!-- actually-better-pr-notification key=$dedupe_key -->"
-          since="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+          marker="<!-- actually-better-pr-notification -->"
+          since="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 
           duplicate_id="$(
             gh api \
               --paginate \
               "repos/$GH_REPO/issues/$pr_number/comments?per_page=100&since=$since" \
-              --jq ".[] | select((.body // \"\") | startswith(\"$marker\")) | .id" \
+              --jq '.[] | select((.body // "") | startswith("<!-- actually-better-pr-notification")) | .id' \
               | tail -n 1
           )"
 
@@ -201,6 +90,9 @@ jobs:
             exit 0
           fi
 
-          body="$marker $icon @ramirogh, $message #$pr_number."
+          body="$marker 🔔 @ramirogh, hay una actualización en el PR #$pr_number."
 
-          gh api             --method POST             "repos/$GH_REPO/issues/$pr_number/comments"             -f body="$body"
+          gh api \
+            --method POST \
+            "repos/$GH_REPO/issues/$pr_number/comments" \
+            -f body="$body"
