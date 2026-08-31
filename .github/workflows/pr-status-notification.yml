@@ -86,18 +86,6 @@ jobs:
               ;;
           esac
 
-          last_notified_actor="$(
-            gh api \
-              --paginate \
-              "repos/$GH_REPO/issues/$pr_number/comments?per_page=100" \
-              --jq '.[] | select((.body // "") | startswith("<!-- actually-better-pr-notification actor=")) | (.body | capture("^<!-- actually-better-pr-notification actor=(?<actor>[^ ]+) -->").actor)' \
-              | tail -n 1
-          )"
-
-          if [[ "$last_notified_actor" == "$actor" ]]; then
-            exit 0
-          fi
-
           icon="🔔"
 
           case "$EVENT_NAME:$action" in
@@ -187,6 +175,26 @@ jobs:
               ;;
           esac
 
-          body="<!-- actually-better-pr-notification actor=$actor --> $icon @ramirogh, $message #$pr_number."
+          dedupe_key="$(
+            printf '%s' "$actor|$EVENT_NAME|$action|$message" \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
+          marker="<!-- actually-better-pr-notification key=$dedupe_key -->"
+          since="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+
+          duplicate_id="$(
+            gh api \
+              --paginate \
+              "repos/$GH_REPO/issues/$pr_number/comments?per_page=100&since=$since" \
+              --jq ".[] | select((.body // \"\") | startswith(\"$marker\")) | .id" \
+              | tail -n 1
+          )"
+
+          if [[ -n "$duplicate_id" ]]; then
+            exit 0
+          fi
+
+          body="$marker $icon @ramirogh, $message #$pr_number."
 
           gh api             --method POST             "repos/$GH_REPO/issues/$pr_number/comments"             -f body="$body"
