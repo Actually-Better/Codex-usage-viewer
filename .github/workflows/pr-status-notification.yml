@@ -60,6 +60,10 @@ jobs:
             exit 0
           fi
 
+          if [[ "$actor" == "ramirogh" && "$EVENT_NAME" == "issue_comment" && "$action" == "created" ]]; then
+            exit 0
+          fi
+
           case "$EVENT_NAME" in
             pull_request_target|pull_request_review|pull_request_review_comment)
               pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
