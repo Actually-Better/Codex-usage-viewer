@@ -1,10 +1,17 @@
-name: Notify PR status
+name: Notify PR status and reviews
 
 on:
   pull_request_target:
     types: [closed]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
 
 permissions:
+  issues: write
   pull-requests: write
 
 jobs:
@@ -16,23 +23,97 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_MERGED: ${{ github.event.pull_request.merged }}
-          CLOSED_BY: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$PR_MERGED" == "true" ]]; then
-            status="fusionado"
-            icon="✅"
-          else
-            status="cerrado sin fusionar"
-            icon="⛔"
-          fi
+          is_positive_message() {
+            local message="$1"
 
-          body="$icon @ramirogh, el PR #$PR_NUMBER se ha $status por @$CLOSED_BY: [$PR_TITLE]($PR_URL)."
+            if [[ "$message" == *"👍"* || "$message" == *"👀"* ]]; then
+              return 0
+            fi
 
-          gh api             --method POST             "repos/$GH_REPO/issues/$PR_NUMBER/comments"             -f body="$body"
+            printf '%s' "$message" |
+              grep -Eiq '(^|[^[:alnum:]_])(lgtm|looks good( to me)?|all good|everything looks good|no issues( found)?|no findings|no blocking issues|all checks (have )?passed|todo (está |esta )?bien|sin (problemas|observaciones|hallazgos|bloqueos)|ning[uú]n problema)([^[:alnum:]_]|$)'
+          }
+
+          case "$EVENT_NAME" in
+            pull_request_target)
+              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
+              actor="$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")"
+              merged="$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")"
+
+              if [[ "$merged" == "true" ]]; then
+                icon="✅"
+                message="@$actor ha fusionado el PR"
+              else
+                icon="⛔"
+                message="@$actor ha cerrado sin fusionar el PR"
+              fi
+              ;;
+
+            pull_request_review)
+              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
+              actor="$(jq -r '.review.user.login' "$GITHUB_EVENT_PATH")"
+              review_state="$(jq -r '.review.state | ascii_downcase' "$GITHUB_EVENT_PATH")"
+              review_body="$(jq -r '.review.body // ""' "$GITHUB_EVENT_PATH")"
+
+              if [[ "$review_state" == "approved" ]]; then
+                icon="✅"
+                message="@$actor ha aprobado el PR"
+              elif [[ "$review_state" == "commented" ]] && is_positive_message "$review_body"; then
+                icon="👍"
+                message="@$actor ha indicado que la revisión está correcta en el PR"
+              else
+                exit 0
+              fi
+              ;;
+
+            pull_request_review_comment)
+              pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.pull_request.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")"
+              actor="$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")"
+              comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+
+              if ! is_positive_message "$comment_body"; then
+                exit 0
+              fi
+
+              icon="👍"
+              message="@$actor ha publicado una respuesta positiva de revisión en el PR"
+              ;;
+
+            issue_comment)
+              if ! jq -e '.issue.pull_request != null' "$GITHUB_EVENT_PATH" >/dev/null; then
+                exit 0
+              fi
+
+              pr_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+              pr_title="$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")"
+              pr_url="$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")"
+              actor="$(jq -r '.comment.user.login' "$GITHUB_EVENT_PATH")"
+              comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+
+              if [[ "$actor" == "github-actions[bot]" ]] || ! is_positive_message "$comment_body"; then
+                exit 0
+              fi
+
+              icon="👍"
+              message="@$actor ha indicado que todo está bien en el PR"
+              ;;
+
+            *)
+              exit 0
+              ;;
+          esac
+
+          body="<!-- actually-better-pr-notification --> $icon @ramirogh, $message #$pr_number: [$pr_title]($pr_url)."
+
+          gh api             --method POST             "repos/$GH_REPO/issues/$pr_number/comments"             -f body="$body"
