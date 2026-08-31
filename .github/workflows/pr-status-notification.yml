@@ -36,7 +36,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-notification-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.actor }}
+  group: pr-notification-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}-${{ github.event.action }}
   cancel-in-progress: false
 
 jobs:
@@ -87,6 +87,7 @@ jobs:
           esac
 
           icon="🔔"
+          dedupe_detail=""
 
           case "$EVENT_NAME:$action" in
             pull_request_target:opened)
@@ -95,9 +96,11 @@ jobs:
             pull_request_target:closed)
               if [[ "$(jq -r '.pull_request.merged' "$GITHUB_EVENT_PATH")" == "true" ]]; then
                 icon="✅"
+                dedupe_detail="merged"
                 message="$actor ha fusionado el PR"
               else
                 icon="⛔"
+                dedupe_detail="closed"
                 message="$actor ha cerrado sin fusionar el PR"
               fi
               ;;
@@ -124,14 +127,17 @@ jobs:
               ;;
             pull_request_target:labeled)
               label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
+              dedupe_detail="$label"
               message="$actor ha añadido la etiqueta '$label' al PR"
               ;;
             pull_request_target:unlabeled)
               label="$(jq -r '.label.name' "$GITHUB_EVENT_PATH")"
+              dedupe_detail="$label"
               message="$actor ha retirado la etiqueta '$label' del PR"
               ;;
             pull_request_review:submitted)
               state="$(jq -r '.review.state | ascii_downcase' "$GITHUB_EVENT_PATH")"
+              dedupe_detail="$state"
               case "$state" in
                 approved)
                   icon="✅"
@@ -176,12 +182,12 @@ jobs:
           esac
 
           dedupe_key="$(
-            printf '%s' "$actor|$EVENT_NAME|$action|$message" \
+            printf '%s' "$EVENT_NAME|$action|$dedupe_detail" \
               | sha256sum \
               | awk '{print $1}'
           )"
           marker="<!-- actually-better-pr-notification key=$dedupe_key -->"
-          since="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+          since="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
 
           duplicate_id="$(
             gh api \
