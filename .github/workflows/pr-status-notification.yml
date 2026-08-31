@@ -52,6 +52,10 @@ jobs:
           action="$(jq -r '.action' "$GITHUB_EVENT_PATH")"
           actor="$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")"
 
+          if [[ "$actor" == "vercel[bot]" || "$actor" == "supabase[bot]" ]]; then
+            exit 0
+          fi
+
           case "$EVENT_NAME" in
             pull_request_target|pull_request_review|pull_request_review_comment)
               pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
