@@ -19,7 +19,7 @@
   ]);
   const SEVERITY = Object.freeze({ normal: 0, preventive: 1, warning: 2, critical: 3, exhausted: 4 });
   const BADGE_COLORS = Object.freeze({
-    green: "#16a34a",
+    green: "#15803d",
     amber: "#f59e0b",
     red: "#dc2626"
   });

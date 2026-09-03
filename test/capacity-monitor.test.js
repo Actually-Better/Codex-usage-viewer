@@ -146,13 +146,15 @@ test("badge follows the lowest actually available percentage", () => {
 
 test("badge colors follow the same percentage levels as the usage ring with accessible text", () => {
   const cases = [
-    { percent: 73, level: "green", textColor: "#000000" },
-    { percent: 51, level: "green", textColor: "#000000" },
+    { percent: 73, level: "green", textColor: "#ffffff" },
+    { percent: 51, level: "green", textColor: "#ffffff" },
     { percent: 50, level: "amber", textColor: "#000000" },
     { percent: 15, level: "amber", textColor: "#000000" },
     { percent: 14, level: "red", textColor: "#ffffff" },
     { percent: 0, level: "red", textColor: "#ffffff" }
   ];
+
+  assert.equal(CodexCapacityMonitor.BADGE_COLORS.green, "#15803d");
 
   for (const { percent, level, textColor } of cases) {
     const visual = CodexCapacityMonitor.evaluateSnapshot(

@@ -518,7 +518,7 @@
     if (snapshot && !snapshot.domUsageVisible) {
       warnings.push("Usage not exposed by ChatGPT UI.");
     }
-    warnings.push("Usage is read from the rendered Codex Analytics UI; outside the active Analytics page, collection temporarily opens a background tab without changing focus.");
+    warnings.push("Usage is read from an extension-owned Codex Analytics page in the background without changing focus or reloading your open page.");
     return warnings;
   }
 

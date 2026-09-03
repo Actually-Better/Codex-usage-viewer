@@ -316,12 +316,13 @@ async function refreshFromAnalyticsPage(reason, refreshContext = {
 }) {
   const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const activeTab = activeTabs[0] || null;
-  let analyticsTab = activeTab && isCodexAnalyticsUrl(activeTab.url)
+  const activeAnalyticsTab = activeTab && isCodexAnalyticsUrl(activeTab.url)
     ? activeTab
     : null;
+  let analyticsTab = null;
   let temporaryTab = false;
   let keepTemporaryTab = false;
-  let failureStage = analyticsTab ? "read-existing" : "create-temporary";
+  let failureStage = "create-temporary";
   let trackedTemporaryTabId = null;
   let temporaryTabWasActivated = false;
   const trackTemporaryTabActivation = (activeInfo) => {
@@ -334,8 +335,11 @@ async function refreshFromAnalyticsPage(reason, refreshContext = {
   }
 
   try {
-    if (analyticsTab) {
-      await forgetRetainedSignInTab(analyticsTab.id);
+    if (activeAnalyticsTab) {
+      // A long-lived Analytics page can keep rendering the values fetched when
+      // it opened. Treat an active page as user-owned, leave it untouched, and
+      // collect from an extension-owned background page below.
+      await forgetRetainedSignInTab(activeAnalyticsTab.id);
     }
     if (!analyticsTab && reason === "popup") {
       analyticsTab = await getRetainedSignInTab();
@@ -360,37 +364,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = {
       failureStage = "read-temporary";
     }
 
-    let result;
-    try {
-      result = await readAnalyticsTab(analyticsTab.id, refreshContext);
-    } catch (error) {
-      if (temporaryTab) throw error;
-      await markRefreshStarted(`${reason}-temporary-fallback`, refreshContext);
-      failureStage = "create-temporary";
-      analyticsTab = await createBackgroundAnalyticsTab();
-      temporaryTab = true;
-      trackedTemporaryTabId = analyticsTab.id;
-      failureStage = "read-temporary";
-      result = await readAnalyticsTab(analyticsTab.id, refreshContext);
-    }
-
-    if (!temporaryTab && result.fresh === false && result.pageLoginStatus !== "logged-out") {
-      const responsiveResult = result;
-      failureStage = "create-temporary";
-      try {
-        analyticsTab = await createBackgroundAnalyticsTab();
-      } catch (error) {
-        return preserveResponsiveResult(responsiveResult, error, "create", refreshContext);
-      }
-      temporaryTab = true;
-      trackedTemporaryTabId = analyticsTab.id;
-      failureStage = "read-temporary";
-      try {
-        result = await readAnalyticsTab(analyticsTab.id, refreshContext);
-      } catch (error) {
-        return preserveResponsiveResult(responsiveResult, error, "read", refreshContext);
-      }
-    }
+    let result = await readAnalyticsTab(analyticsTab.id, refreshContext);
 
     assertCurrentAnalyticsRefresh(refreshContext);
 
@@ -432,9 +406,7 @@ async function refreshFromAnalyticsPage(reason, refreshContext = {
       lastRefreshAttemptAt: new Date().toISOString(),
       diagnostic: tabCreationFailed
         ? "The extension could not create the temporary Codex Analytics tab."
-        : failureStage === "read-temporary"
-          ? "The temporary Codex Analytics page did not respond after loading."
-          : "The existing Codex Analytics page did not respond after loading."
+        : "The temporary Codex Analytics page did not respond after loading."
     };
     await chrome.storage.local.set({ [storageKeys.state]: state });
     await expireCapacityMonitorState().catch(() => {});
@@ -594,22 +566,6 @@ async function readAnalyticsTab(tabId, refreshContext) {
   await waitForTabReadyOrDelay(tabId);
   assertCurrentAnalyticsRefresh(refreshContext);
   return requestSnapshotWithRetry(tabId, refreshContext);
-}
-
-async function preserveResponsiveResult(result, fallbackError, failureStage, refreshContext) {
-  const fallbackAction = failureStage === "read"
-    ? "could not be read"
-    : "could not be created";
-  const stored = await chrome.storage.local.get([storageKeys.state]);
-  assertCurrentAnalyticsRefresh(refreshContext);
-  const currentState = stored[storageKeys.state] || result.state;
-  const state = {
-    ...currentState,
-    diagnostic: `${currentState.diagnostic || result.state.diagnostic || "Analytics responded without new metrics."} The optional temporary fallback ${fallbackAction}.`,
-    fallbackDiagnostic: String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError)
-  };
-  await chrome.storage.local.set({ [storageKeys.state]: state });
-  return { ...result, state, fallbackFailed: true };
 }
 
 async function markManualSignInRequired(result, refreshContext) {
@@ -1196,10 +1152,10 @@ function loadActionIconBitmap(size, path) {
 
 function drawCapacityBadge(context, size, rawText, color, textColor) {
   const text = String(rawText).slice(0, 3);
-  const badgeHeight = Math.round(size * 0.6);
+  const badgeHeight = Math.round(size * 0.68);
   const badgeTop = size - badgeHeight;
   const radius = Math.max(2, Math.round(size * 0.16));
-  const fontScale = text.length >= 3 ? 0.38 : 0.5;
+  const fontScale = text.length >= 3 ? 0.43 : text.length === 2 ? 0.54 : 0.6;
 
   context.save();
   context.beginPath();
@@ -1210,10 +1166,10 @@ function drawCapacityBadge(context, size, rawText, color, textColor) {
   context.lineWidth = Math.max(1, Math.round(size / 32));
   context.stroke();
   context.fillStyle = textColor;
-  context.font = `800 ${Math.max(7, Math.round(size * fontScale))}px Arial, sans-serif`;
+  context.font = `500 ${Math.max(7, Math.round(size * fontScale))}px "Segoe UI", Arial, sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, size / 2, badgeTop + badgeHeight / 2 + size * 0.025);
+  context.fillText(text, size / 2, badgeTop + badgeHeight / 2, size * 0.88);
   context.restore();
 }
 

@@ -7,6 +7,7 @@ All notable user-facing changes are documented here.
 - Add a locally persisted automatic-refresh slider covering every minute from 1 to 60, retaining 15 minutes as the default.
 - Add persisted remaining-capacity states for preventive (25%), configurable low/critical thresholds, exhausted (0%), and reset-to-100% transitions.
 - Add larger dynamically rendered toolbar percentages based on the lowest actually available limit, with a native-badge fallback and a setting to hide the permanent percentage outside warning/critical states.
+- Improve toolbar-number legibility with larger medium-weight digits and a darker green badge that supports high-contrast white text.
 - Refresh stale usage immediately when Chrome or Edge reopens, while skipping the startup request when collected data is newer than the configured refresh interval.
 - Show every metric under Other limits on its own full-width row.
 - Seed upgrade baselines only from persisted, recent, signed-in confirmed counters, apply generation-bound refresh timeouts to popup, chained popup retries, and scheduled checks, expire stale observations after successful, incomplete, failed, or timed-out refreshes and clear their persistent alerts, invalidate timed-out shared refreshes so late results or timeout cleanup cannot overwrite newer data, serialize initialization, idempotent sign-out suppression, accepted reads, and notification opt-out, keep default settings in memory so explicit choices are never overwritten, discard pre-logout refresh data and rebaseline after in-place authentication, require five consecutive per-counter observations for alerts, recheck the session immediately before sound playback, support callback and Promise notification APIs, restore visuals only from confirmed limits in the last accepted read, evaluate alerts only from accepted refresh reads, and clear visible capacity notifications on recovery or opt-out.
@@ -15,9 +16,9 @@ All notable user-facing changes are documented here.
 - Add compact Settings controls for notifications, reset notifications, toolbar percentage, low/critical thresholds, and sounds.
 - Stop opening Analytics when the popup merely opens; manual refresh now creates an inactive temporary Analytics tab, reads it completely, and closes only the tab created by the extension without changing focus.
 - Keep an optional **Visit Analytics** button that deliberately opens or focuses Analytics, including its existing browser window, without making it a refresh prerequisite.
-- Reuse Analytics only when it is already the active page; from every other page, open a new inactive temporary page even if Analytics exists in the background.
-- Give scheduled refreshes the same background-tab fallback when Analytics is closed, fails, or returns no metrics; recreate the periodic alarm whenever the background worker starts if it is missing or outdated.
-- Close scheduled sign-in tabs, preserve newer content-script snapshots during fallback failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
+- Never use a user-open Analytics page as the refresh source; collect from a newly loaded inactive page (or an extension-owned sign-in tab) so a long-lived page cannot hide usage changes or threshold crossings, while leaving the user's page untouched.
+- Give scheduled refreshes the same fresh background-tab path; recreate the periodic alarm whenever the background worker starts if it is missing or outdated.
+- Close scheduled sign-in tabs, preserve newer content-script snapshots during refresh failures, guide the user to manual refresh when authentication is required, and honor a manual refresh that joins at any point before cleanup.
 - Make the compact paired layout the only popup layout, with login/plan, 5-hour/weekly limits, Spark limits, and credits/banked full resets.
 - Use small color-coded circular gauges for percentage metrics.
 - Reuse the single retained background sign-in tab across repeated manual refreshes instead of accumulating duplicate Analytics tabs.

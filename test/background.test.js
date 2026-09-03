@@ -20,7 +20,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
   const sessionStorage = {
     [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
   };
-  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], badgeDraws: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
+  const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], badgeDraws: [], badgeTypography: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
   const listeners = {};
   const tabUpdatedListeners = new Set();
   const tabActivatedListeners = new Set();
@@ -171,6 +171,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     }
   };
   class FakeCanvasContext {
+    constructor(size) { this.size = size; }
     drawImage() {}
     save() {}
     beginPath() {}
@@ -180,12 +181,13 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     closePath() {}
     fill() { this.badgeBackgroundColor = this.fillStyle; }
     stroke() {}
-    fillText(text) {
+    fillText(text, _x, _y, maxWidth) {
       calls.badgeDraws.push({
         text,
         backgroundColor: this.badgeBackgroundColor,
         textColor: this.fillStyle
       });
+      calls.badgeTypography.push({ size: this.size, font: this.font, maxWidth });
     }
     restore() {}
     getImageData(x, y, width, height) { return { x, y, width, height }; }
@@ -195,7 +197,7 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
       this.width = width;
       this.height = height;
     }
-    getContext() { return new FakeCanvasContext(); }
+    getContext() { return new FakeCanvasContext(this.width); }
   }
   const contextGlobals = {
     ChatGPTUsageConfig,
@@ -680,6 +682,27 @@ test("supported browsers render the percentage as a larger custom action icon ba
     textColor: "#000000"
   });
   assert.match(harness.calls.actionTitle.at(-1).title, /42% remaining$/);
+});
+
+test("custom action badges use lighter, larger numerals for single digits", async () => {
+  const harness = createBackgroundHarness({ enableCustomActionIcon: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.badgeTypography.length = 0;
+
+  await harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: {
+      codexWeekly: {
+        value: "6% remaining",
+        structured: { remainingPercent: 6 }
+      }
+    }
+  })})`);
+
+  assert.deepEqual(harness.calls.badgeTypography, [
+    { size: 16, font: '500 10px "Segoe UI", Arial, sans-serif', maxWidth: 14.08 },
+    { size: 32, font: '500 19px "Segoe UI", Arial, sans-serif', maxWidth: 28.16 },
+    { size: 48, font: '500 29px "Segoe UI", Arial, sans-serif', maxWidth: 42.24 }
+  ]);
 });
 
 test("native action badges receive the same accessible colors as custom badges", async () => {
@@ -1652,6 +1675,49 @@ test("periodic refresh creates a real temporary Analytics tab when none is open"
   assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [17]);
 });
 
+test("periodic refresh uses a fresh background page while Analytics stays open", async () => {
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: {
+        value: "11% remaining",
+        structured: { remainingPercent: 11 }
+      }
+    }
+  }, null, {});
+  const snapshotAt = (remainingPercent) => ({
+    ...visibleSnapshot(),
+    usage: {
+      codexWeekly: {
+        value: `${remainingPercent}% remaining`,
+        structured: { remainingPercent }
+      }
+    }
+  });
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
+    capacityState: baseline.state,
+    snapshot(_callNumber, tabId) {
+      return snapshotAt(tabId === 42 ? 11 : 10);
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const result = await harness.run('refreshOnce("alarm")');
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [42]);
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
+    10
+  );
+  assert.deepEqual(harness.calls.notifications.map((notification) => notification.id), [
+    "codex-capacity-codexWeekly-low"
+  ]);
+});
+
 test("refresh opens a fresh background tab when Analytics exists only in the background", async () => {
   const harness = createBackgroundHarness({
     tabs: [
@@ -1670,7 +1736,7 @@ test("refresh opens a fresh background tab when Analytics exists only in the bac
   assert.equal(harness.calls.update, 0);
 });
 
-test("periodic refresh retries an unusable existing page in a real temporary tab", async () => {
+test("periodic refresh ignores an unusable open page and reads a fresh background page", async () => {
   const emptySnapshot = {
     status: "ok",
     hostname: "chatgpt.com",
@@ -1691,7 +1757,7 @@ test("periodic refresh retries an unusable existing page in a real temporary tab
 
   assert.equal(result.ok, true);
   assert.equal(result.state.status, "usage-current");
-  assert.equal(harness.calls.sendMessage, 38);
+  assert.equal(harness.calls.sendMessage, 13);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.createArgs[0].active, false);
   assert.equal(harness.calls.remove, 1);
@@ -1885,7 +1951,7 @@ test("concurrent release cannot erase a newly retained sign-in tab", async () =>
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
 });
 
-test("an active retained Analytics tab becomes user-owned and is never removed", async () => {
+test("an active retained Analytics tab becomes user-owned while refresh uses a temporary tab", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot: visibleSnapshot(),
@@ -1895,8 +1961,9 @@ test("an active retained Analytics tab becomes user-owned and is never removed",
   const result = await harness.run("refreshForPopup()");
 
   assert.equal(result.state.status, "usage-current");
-  assert.equal(harness.calls.create, 0);
-  assert.equal(harness.calls.remove, 0);
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.getOpenTabs().find((tab) => tab.id === 42).active, true);
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
@@ -1968,7 +2035,7 @@ test("scheduled sign-in status preserves a newer stored usage snapshot", async (
   assert.deepEqual(harness.storage[ChatGPTUsageConfig.storageKeys.state], result.state);
 });
 
-test("a periodic logged-out existing page does not create another fallback tab", async () => {
+test("a periodic logged-out refresh verifies sign-in without touching the open page", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     snapshot: {
@@ -1985,10 +2052,11 @@ test("a periodic logged-out existing page does not create another fallback tab",
   const result = await harness.run('refreshOnce("alarm")');
 
   assert.equal(result.ok, true);
-  assert.equal(result.state.status, "sign-in-required");
-  assert.equal(harness.calls.create, 0);
+  assert.equal(result.state.status, "sign-in-required-manual-refresh");
+  assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.update, 0);
-  assert.equal(harness.calls.remove, 0);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
+  assert.equal(harness.getOpenTabs().find((tab) => tab.id === 42).active, true);
 });
 
 test("a popup joining a periodic logged-out refresh keeps the temporary tab for sign-in", async () => {
@@ -2197,7 +2265,8 @@ test("concurrent popup refreshes share one Analytics collection", async () => {
   assert.equal(results[0].ok, true);
   assert.equal(results[1].ok, true);
   assert.equal(harness.calls.sendMessage, 13);
-  assert.equal(harness.calls.create, 0);
+  assert.equal(harness.calls.create, 1);
+  assert.deepEqual(harness.calls.removedTabIds, [99]);
 });
 
 test("a responsive Analytics page without new metrics is not reported as a failure", async () => {
@@ -2222,13 +2291,13 @@ test("a responsive Analytics page without new metrics is not reported as a failu
   assert.equal(result.fresh, false);
   assert.equal(result.state.status, "analytics-no-new-data");
   assert.deepEqual(result.state.snapshot, cached);
-  assert.equal(harness.calls.sendMessage, 50);
+  assert.equal(harness.calls.sendMessage, 25);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.createArgs[0].active, false);
   assert.equal(harness.calls.remove, 1);
 });
 
-test("manual refresh retries an existing page without metrics in a temporary Analytics tab", async () => {
+test("manual refresh bypasses an open page without metrics for a fresh background page", async () => {
   const emptySnapshot = {
     status: "ok",
     hostname: "chatgpt.com",
@@ -2250,13 +2319,13 @@ test("manual refresh retries an existing page without metrics in a temporary Ana
   assert.equal(result.ok, true);
   assert.equal(result.state.status, "usage-current");
   assert.equal(result.state.snapshot.usage.codex5h.value, "5h limit: 60% remaining");
-  assert.equal(harness.calls.sendMessage, 38);
+  assert.equal(harness.calls.sendMessage, 13);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.createArgs[0].active, false);
   assert.equal(harness.calls.remove, 1);
 });
 
-test("refresh failure requires both the existing and temporary Analytics readers to be unreachable", async () => {
+test("refresh failure is based on the fresh temporary Analytics reader", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
     sendError: new Error("Receiving end does not exist")
@@ -2267,12 +2336,12 @@ test("refresh failure requires both the existing and temporary Analytics readers
   assert.equal(result.ok, false);
   assert.equal(result.state.status, "content-script-unavailable");
   assert.match(result.error, /Receiving end does not exist/);
-  assert.equal(harness.calls.sendMessage, 50);
+  assert.equal(harness.calls.sendMessage, 25);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 1);
 });
 
-test("failure to create an optional fallback preserves the responsive incomplete result", async () => {
+test("failure to create a fresh reader never trusts the open Analytics page", async () => {
   const cached = visibleSnapshot();
   const harness = createBackgroundHarness({
     tabs: [{ id: 42, url: "https://chatgpt.com/codex/cloud/settings/analytics", active: true, status: "complete" }],
@@ -2291,18 +2360,16 @@ test("failure to create an optional fallback preserves the responsive incomplete
 
   const result = await harness.run("refreshForPopup()");
 
-  assert.equal(result.ok, true);
-  assert.equal(result.fresh, false);
-  assert.equal(result.fallbackFailed, true);
-  assert.equal(result.state.status, "analytics-no-new-data");
-  assert.match(result.state.diagnostic, /optional temporary fallback could not be created/i);
-  assert.match(result.state.fallbackDiagnostic, /Tabs cannot be created/);
+  assert.equal(result.ok, false);
+  assert.equal(result.state.status, "codex-analytics-load-failed");
+  assert.match(result.state.diagnostic, /could not create the temporary/i);
+  assert.match(result.error, /Tabs cannot be created/);
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 0);
 });
 
-test("failure to read an optional fallback preserves the responsive incomplete result", async () => {
+test("failure to read the fresh page preserves cached usage without trusting the open page", async () => {
   const cached = visibleSnapshot();
   const emptySnapshot = {
     status: "ok",
@@ -2324,18 +2391,16 @@ test("failure to read an optional fallback preserves the responsive incomplete r
 
   const result = await harness.run("refreshForPopup()");
 
-  assert.equal(result.ok, true);
-  assert.equal(result.fresh, false);
-  assert.equal(result.fallbackFailed, true);
-  assert.equal(result.state.status, "analytics-no-new-data");
-  assert.match(result.state.diagnostic, /optional temporary fallback could not be read/i);
-  assert.match(result.state.fallbackDiagnostic, /Temporary reader unavailable/);
+  assert.equal(result.ok, false);
+  assert.equal(result.state.status, "content-script-unavailable");
+  assert.match(result.state.diagnostic, /temporary Codex Analytics page did not respond/i);
+  assert.match(result.error, /Temporary reader unavailable/);
   assert.deepEqual(result.state.snapshot, cached);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 1);
 });
 
-test("fallback preservation keeps a newer content snapshot stored during the retry", async () => {
+test("fresh-reader failure keeps a newer content snapshot stored during the attempt", async () => {
   const cached = visibleSnapshot();
   const newerSnapshot = {
     ...visibleSnapshot(),
@@ -2375,12 +2440,12 @@ test("fallback preservation keeps a newer content snapshot stored during the ret
 
   const result = await harness.run("refreshForPopup()");
 
-  assert.equal(result.ok, true);
-  assert.equal(result.fallbackFailed, true);
-  assert.equal(result.state.status, "usage-current");
+  assert.equal(result.ok, false);
+  assert.equal(result.state.status, "content-script-unavailable");
   assert.equal(result.state.snapshot.usage.codex5h.value, "5h limit: 58% remaining");
   assert.equal(result.state.dataCollectedAt, newerSnapshot.collectedAt);
-  assert.match(result.state.diagnostic, /optional temporary fallback could not be read/i);
+  assert.match(result.state.diagnostic, /temporary Codex Analytics page did not respond/i);
+  assert.match(result.error, /Temporary reader unavailable/);
   assert.equal(harness.calls.remove, 1);
 });
 
