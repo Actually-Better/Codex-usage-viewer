@@ -107,6 +107,53 @@ test("parseCodexUsageText exposes extraction confidence", () => {
   assert.equal(variant.codexCredits.confidence, "low");
 });
 
+test("credit parsing accepts an explicit zero balance", () => {
+  const english = ChatGPTUsageModel.parseCodexUsageText("Credits remaining\n0");
+  const spanish = ChatGPTUsageModel.parseCodexUsageText("Créditos restantes\n0");
+
+  assert.equal(english.codexCredits.structured.remainingCredits, 0);
+  assert.equal(english.codexCredits.confidence, "high");
+  assert.equal(spanish.codexCredits.structured.remainingCredits, 0);
+  assert.equal(spanish.codexCredits.confidence, "high");
+});
+
+test("credit parsing never borrows a reset date or time as the balance", () => {
+  const usage = ChatGPTUsageModel.parseCodexUsageText(`
+    Credits
+    Resets Sep 8, 2026 at 8:32 AM
+    Banked resets
+    Expires Oct 4, 3:59 AM
+  `);
+
+  assert.equal(usage.codexCredits.value, null);
+  assert.equal(usage.remainingCredits.value, null);
+});
+
+test("usage merging preserves a higher-confidence zero balance", () => {
+  const confirmedZero = ChatGPTUsageModel.parseCodexUsageText("Credits remaining\n0").codexCredits;
+  const ambiguousEight = {
+    value: "Credits remaining: 8",
+    confidence: "low",
+    structured: {
+      label: "Credits",
+      remainingCredits: 8,
+      confidence: "low"
+    }
+  };
+
+  const preserved = ChatGPTUsageModel.mergeUsageFields(
+    { codexCredits: confirmedZero },
+    { codexCredits: ambiguousEight }
+  );
+  const corrected = ChatGPTUsageModel.mergeUsageFields(
+    { codexCredits: ambiguousEight },
+    { codexCredits: confirmedZero }
+  );
+
+  assert.equal(preserved.codexCredits.structured.remainingCredits, 0);
+  assert.equal(corrected.codexCredits.structured.remainingCredits, 0);
+});
+
 test("parseCodexUsageText counts a Spanish full-reset card without an explicit number", () => {
   const usage = ChatGPTUsageModel.parseCodexUsageText(`
     Restablecimientos de límites de uso

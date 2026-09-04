@@ -194,7 +194,11 @@ async function saveContentSnapshot(snapshot, tab) {
       return { ok: true, ignored: true, reason: "Preserved the last valid Codex Analytics snapshot." };
     }
   }
-  return saveSnapshot(snapshot, tab, "content-script");
+  const result = await saveSnapshot(snapshot, tab, "content-script");
+  if (tab && tab.active && snapshot && snapshot.loginStatus !== "logged-out") {
+    await applyObservedCapacityVisual(snapshot);
+  }
+  return result;
 }
 
 async function getPopupState() {
@@ -209,6 +213,9 @@ async function getPopupState() {
     [storageKeys.state]: nextState,
     [storageKeys.counters]: counters
   });
+  if (!isSignedOutUsageState(nextState)) {
+    await applyObservedCapacityVisual(nextState.snapshot);
+  }
   refreshIfStale("popup-open", nextState).catch(() => {});
   return { ok: true, state: nextState };
 }
@@ -690,11 +697,10 @@ async function requestSnapshotWithRetry(tabId, refreshContext) {
 }
 
 function mergeUsageSnapshot(accumulated, incoming) {
-  const usage = { ...((accumulated && accumulated.usage) || {}) };
-  for (const [key, field] of Object.entries((incoming && incoming.usage) || {})) {
-    if (field && field.value) usage[key] = field;
-    else if (!(key in usage)) usage[key] = field;
-  }
+  const usage = ChatGPTUsageModel.mergeUsageFields(
+    accumulated && accumulated.usage,
+    incoming && incoming.usage
+  );
   return {
     ...(accumulated || {}),
     ...incoming,
@@ -851,6 +857,32 @@ function processCapacitySnapshot(
   );
   capacityUpdate = result.catch(() => {});
   return result;
+}
+
+function applyObservedCapacityVisual(snapshot) {
+  const result = capacityUpdate.then(
+    () => applyObservedCapacityVisualSerialized(snapshot),
+    () => applyObservedCapacityVisualSerialized(snapshot)
+  );
+  capacityUpdate = result.catch(() => {});
+  return result;
+}
+
+async function applyObservedCapacityVisualSerialized(snapshot) {
+  if (!snapshot || !snapshot.codexAnalytics || snapshot.loginStatus === "logged-out") {
+    return { ignored: true, reason: "No signed-in Analytics snapshot is available." };
+  }
+  const available = CodexCapacityMonitor.extractAvailableCounters(snapshot);
+  if (!available.length) {
+    return { ignored: true, reason: "No visible capacity counters are available." };
+  }
+  const data = await chrome.storage.local.get([storageKeys.capacitySettings]);
+  const visual = CodexCapacityMonitor.deriveVisualState(
+    available,
+    data[storageKeys.capacitySettings]
+  );
+  await applyCapacityVisual(visual);
+  return { visual };
 }
 
 async function processCapacitySnapshotSerialized(

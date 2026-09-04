@@ -4,6 +4,7 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Preserve explicit zero credit balances instead of borrowing digits from nearby reset dates or times, and keep the toolbar badge synchronized with the latest visible Analytics percentage without treating that observation as a confirmed alert reading.
 - Add a locally persisted automatic-refresh slider covering every minute from 1 to 60, retaining 15 minutes as the default.
 - Add persisted remaining-capacity states for preventive (25%), configurable low/critical thresholds, exhausted (0%), and reset-to-100% transitions.
 - Add larger dynamically rendered toolbar percentages based on the lowest actually available limit, with a native-badge fallback and a setting to hide the permanent percentage outside warning/critical states.

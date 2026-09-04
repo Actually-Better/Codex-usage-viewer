@@ -72,7 +72,7 @@
     const structuredUsage = analyticsDom && analyticsDom.text
       ? extractUsage(analyticsDom.text)
       : null;
-    const usage = mergeUsageFields(fallbackUsage, structuredUsage);
+    const usage = ChatGPTUsageModel.mergeUsageFields(fallbackUsage, structuredUsage);
     const diagnosticText = analyticsDom && analyticsDom.text
       ? `${analyticsDom.text}\n${safeText}`
       : safeText;
@@ -135,15 +135,6 @@
     }
 
     return Array.from(parts).join("\n").slice(0, 24000);
-  }
-
-  function mergeUsageFields(fallbackUsage, structuredUsage) {
-    const merged = { ...(fallbackUsage || {}) };
-    for (const [key, field] of Object.entries(structuredUsage || {})) {
-      if (field && field.value) merged[key] = field;
-      else if (!(key in merged)) merged[key] = field;
-    }
-    return merged;
   }
 
   function collectCodexAnalyticsDom(targetDocument = document) {

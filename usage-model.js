@@ -187,6 +187,40 @@
     return Object.values(snapshot.usage).some((field) => field && field.value);
   }
 
+  function mergeUsageFields(baseUsage, incomingUsage) {
+    const merged = { ...(baseUsage || {}) };
+    for (const [key, incomingField] of Object.entries(incomingUsage || {})) {
+      const existingField = merged[key];
+      if (!(key in merged)
+        || usageFieldQuality(incomingField) >= usageFieldQuality(existingField)) {
+        merged[key] = incomingField;
+      }
+    }
+    return merged;
+  }
+
+  function usageFieldQuality(field) {
+    if (!field || !field.value) return 0;
+    const structured = field.structured && typeof field.structured === "object"
+      ? field.structured
+      : null;
+    const hasStructuredValue = Boolean(structured && (
+      Number.isFinite(structured.remainingPercent)
+      || Number.isFinite(structured.remainingCredits)
+      || Number.isFinite(structured.bankedResetCount)
+      || structured.resetText
+      || structured.expiresText
+    ));
+    const confidence = String(field.confidence || (structured && structured.confidence) || "");
+    const confidenceScore = {
+      high: 4,
+      medium: 3,
+      visible: 2,
+      low: 1
+    }[confidence] || 0;
+    return (hasStructuredValue ? 10 : 0) + confidenceScore;
+  }
+
   function parseCodexUsageText(text) {
     const normalized = normalizeVisibleText(text);
     const fields = {};
@@ -374,18 +408,42 @@
       const currentLine = lines[index];
       const currentNormalized = normalizeForMatch(currentLine);
       if (!hasConcept(currentNormalized, "credits")) continue;
-      const window = lines.slice(index, Math.min(lines.length, index + 2)).join(" ");
+      const nextLine = lines[index + 1] || "";
+      const value = extractInlineCreditValue(currentLine)
+        ?? extractStandaloneCreditValue(nextLine);
+      if (value === null) continue;
+      const window = [currentLine, nextLine].filter(Boolean).join(" ");
       const normalized = normalizeForMatch(window);
-      const numberMatch = window.match(/\b(\d{1,9})\b/);
-      if (!numberMatch) continue;
-      const value = Number(numberMatch[1]);
-      if (!Number.isFinite(value) || value < 0) continue;
       return {
-        value: Math.floor(value),
+        value,
         confidence: hasConcept(normalized, "remaining") ? "high" : "low"
       };
     }
     return null;
+  }
+
+  function extractInlineCreditValue(line) {
+    const normalized = normalizeForMatch(line);
+    const patterns = [
+      /\b(?:credits?|creditos?)\s+(?:remaining|left|available|restantes?|disponibles?)\s*[:\-]?\s*(\d{1,9})\b/,
+      /\b(?:remaining|left|available|restantes?|disponibles?)\s+(?:credits?|creditos?)\s*[:\-]?\s*(\d{1,9})\b/,
+      /\bcredit\s+balance\s*[:\-]?\s*(\d{1,9})\b/,
+      /\bsaldo(?:\s+de)?(?:\s+creditos?)?\s*[:\-]?\s*(\d{1,9})\b/,
+      /^(?:credits?|creditos?)\s*[:\-]?\s*(\d{1,9})\b/,
+      /\bcodex\s+credits?\s*[:\-]?\s*(\d{1,9})\b/
+    ];
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+
+  function extractStandaloneCreditValue(line) {
+    const match = normalizeForMatch(line).match(
+      /^\s*(?:[$€£]\s*)?(\d{1,9})(?:[.,]0+)?\s*(?:credits?|creditos?)?\s*$/
+    );
+    return match ? Number(match[1]) : null;
   }
 
   function extractBankedResets(text) {
@@ -614,6 +672,7 @@
     formatTime,
     hasVisibleUsage,
     matchesUsageTerms,
+    mergeUsageFields,
     normalizeCounters,
     normalizeRefreshPeriodMinutes,
     normalizeMetricField,

@@ -429,6 +429,45 @@ test("opening the popup skips the refresh when usage is recent", async () => {
   assert.deepEqual(Array.from(harness.context.popupOpenRefreshReasons), []);
 });
 
+test("opening the popup synchronizes the badge with its recent Analytics snapshot", async () => {
+  const recentAt = new Date(Date.now() - 60 * 1000).toISOString();
+  const previous = CodexCapacityMonitor.evaluateSnapshot({
+    usage: {
+      codexWeekly: { value: "0% remaining", structured: { remainingPercent: 0 } }
+    }
+  }, null, {}, recentAt);
+  const current = {
+    status: "ok",
+    loginStatus: "logged-in",
+    collectedAt: recentAt,
+    codexAnalytics: { pageDetected: true },
+    domUsageVisible: true,
+    usage: {
+      codexWeekly: { value: "100% remaining", structured: { remainingPercent: 100 } }
+    }
+  };
+  const harness = createBackgroundHarness({
+    initialState: {
+      snapshot: current,
+      dataCollectedAt: recentAt,
+      lastRefreshAt: recentAt
+    },
+    capacityState: previous.state
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+
+  const result = await harness.run("getPopupState()");
+
+  assert.equal(result.ok, true);
+  assert.equal(harness.calls.badgeText.at(-1).text, "100");
+  assert.equal(
+    harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
+    0
+  );
+  assert.equal(harness.calls.notifications.length, 0);
+});
+
 test("scheduled checks use the same bounded refresh wrapper as the popup", async () => {
   const harness = createBackgroundHarness();
   await new Promise((resolve) => setImmediate(resolve));
@@ -868,10 +907,11 @@ test("content snapshots never emit alerts before the accepted stable read", asyn
       }
     }
   });
-  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(10))}, { id: 7 })`);
-  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(5))}, { id: 7 })`);
+  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(10))}, { id: 7, active: true })`);
+  await harness.run(`saveContentSnapshot(${JSON.stringify(snapshotAt(5))}, { id: 7, active: true })`);
 
   assert.equal(harness.calls.notifications.length, 0);
+  assert.equal(harness.calls.badgeText.at(-1).text, "5");
   assert.equal(
     harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
     11
