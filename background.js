@@ -1017,6 +1017,7 @@ async function expireCapacityMonitorStateSerialized() {
     version: 2,
     counters,
     availableKeys: previous.availableKeys.filter((key) => counters[key]),
+    pace: previous.pace,
     updatedAt: new Date().toISOString()
   };
   await chrome.storage.local.set({ [storageKeys.capacityState]: state });

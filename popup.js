@@ -21,6 +21,8 @@
   };
   let latestDiagnostics = null;
   let latestRefreshTimestamp = null;
+  let latestSnapshot = null;
+  let latestPace = null;
 
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
@@ -43,13 +45,21 @@
     if (areaName !== "local") return;
     const stateChange = changes[ChatGPTUsageConfig.storageKeys.state];
     if (stateChange && stateChange.newValue) renderState(stateChange.newValue);
+    const capacityChange = changes[ChatGPTUsageConfig.storageKeys.capacityState];
+    if (capacityChange) {
+      latestPace = capacityChange.newValue && capacityChange.newValue.pace;
+      renderCodexCards(latestSnapshot);
+    }
     const settingsChange = changes[ChatGPTUsageConfig.storageKeys.capacitySettings];
     if (settingsChange) applyCapacitySettings(settingsChange.newValue);
     const refreshPeriodChange = changes[ChatGPTUsageConfig.storageKeys.refreshPeriodMinutes];
     if (refreshPeriodChange) applyRefreshPeriod(refreshPeriodChange.newValue);
   });
   initializePopup();
-  setInterval(updateRefreshAge, 30000);
+  setInterval(() => {
+    updateRefreshAge();
+    renderCodexCards(latestSnapshot);
+  }, 30000);
 
   async function initializePopup() {
     renderLoading();
@@ -57,6 +67,9 @@
   }
 
   async function loadCachedState() {
+    const key = ChatGPTUsageConfig.storageKeys.capacityState;
+    const stored = await chrome.storage.local.get([key]);
+    latestPace = stored[key] && stored[key].pace;
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
     renderState(response && response.state);
   }
@@ -182,6 +195,7 @@
 
   function renderState(state) {
     const snapshot = state && state.snapshot;
+    latestSnapshot = snapshot;
     const counters = state && state.counters;
     const status = ChatGPTUsageModel.summarizeAvailability(snapshot || state);
     const hasVisibleUsage = ChatGPTUsageModel.hasVisibleUsage(snapshot);
@@ -307,6 +321,17 @@
       ? renderMetricCard(field, fallbackTitle)
       : renderUnavailableCard(fallbackTitle);
     card.classList.add(className);
+    if ((key === "codex5h" || key === "codexWeekly") && hasMetricData(snapshot, key)) {
+      const estimate = document.createElement("div");
+      estimate.className = "metric-estimate";
+      const remaining = field.structured && field.structured.remainingPercent;
+      const result = CodexCapacityMonitor.estimateTimeRemaining(
+        snapshot.loginStatus === "logged-in" ? latestPace : null, key, remaining
+      );
+      estimate.textContent = CodexCapacityMonitor.formatPaceEstimate(result);
+      estimate.title = "Based on consumption between confirmed refreshes over the last 2 hours. Measured from the latest refresh, assuming the same pace and no reset.";
+      card.append(estimate);
+    }
     section.append(card);
   }
 

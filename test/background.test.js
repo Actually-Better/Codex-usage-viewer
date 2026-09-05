@@ -916,12 +916,35 @@ test("content snapshots never emit alerts before the accepted stable read", asyn
     harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].counters.codexWeekly.remainingPercent,
     11
   );
+  assert.deepEqual(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].pace, baseline.state.pace);
 
   await harness.run(`saveSnapshot(${JSON.stringify(snapshotAt(5))}, { id: 7 }, "requested-stable")`);
+  assert.equal(harness.storage[ChatGPTUsageConfig.storageKeys.capacityState].pace.codexWeekly.at(-1).remainingPercent, 5);
   assert.deepEqual(
     harness.calls.notifications.map((notification) => notification.id),
     ["codex-capacity-codexWeekly-critical"]
   );
+});
+
+test("alert expiration preserves pace for hourly refreshes, while sign-out clears it", async () => {
+  const now = Date.now();
+  const baseline = CodexCapacityMonitor.evaluateSnapshot({
+    usage: { codex5h: { structured: { remainingPercent: 80 } } }
+  }, null, {}, new Date(now - 60 * 60000).toISOString());
+  const harness = createBackgroundHarness({ capacityState: baseline.state });
+  await new Promise((resolve) => setImmediate(resolve));
+  await harness.run("expireCapacityMonitorState()");
+  let stored = harness.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.equal(stored.counters.codex5h, undefined);
+  assert.equal(stored.pace.codex5h[0].remainingPercent, 80);
+  await harness.run('processCapacitySnapshot({ usage: { codex5h: { structured: { remainingPercent: 60 } } } })');
+  stored = harness.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  const estimate = CodexCapacityMonitor.estimateTimeRemaining(stored.pace, "codex5h", 60);
+  assert.equal(estimate.status, "estimated");
+  assert.ok(Math.abs(estimate.durationMs - 180 * 60000) < 1000);
+  await harness.run('saveContentSnapshot({ loginStatus: "logged-out" }, { id: 7 })');
+  stored = harness.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.equal(CodexCapacityMonitor.estimateTimeRemaining(stored.pace, "codex5h", 60).status, "unavailable");
 });
 
 test("a transient optional counter stays in popup data but cannot alert", async () => {

@@ -11,6 +11,9 @@
   });
   const PREVENTIVE_THRESHOLD = 25;
   const COUNTER_STALE_AFTER_MS = 35 * 60 * 1000;
+  const PACE_WINDOW_MS = 2 * 60 * 60 * 1000;
+  const PACE_MAX_GAP_MS = 90 * 60 * 1000;
+  const PACE_KEYS = ["codex5h", "codexWeekly"];
   const COUNTERS = Object.freeze([
     { key: "codexWeekly", label: "Weekly usage" },
     { key: "codex5h", label: "5-hour usage" },
@@ -58,6 +61,7 @@
     return {
       version: 2,
       counters,
+      pace: normalizePace(value.pace),
       availableKeys,
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
     };
@@ -100,10 +104,70 @@
     const state = {
       version: 2,
       counters,
+      pace: updatePace(available, previous.pace, Date.parse(now)),
       availableKeys: available.map((counter) => counter.key),
       updatedAt: now
     };
     return { available, events, settings, state, visual: deriveVisualState(available, settings) };
+  }
+
+  function normalizePace(raw) {
+    return Object.fromEntries(PACE_KEYS.map((key) => {
+      const samples = raw && Array.isArray(raw[key]) ? raw[key] : [];
+      return [key, samples.slice(-121).filter((sample) => sample
+        && Number.isFinite(sample.at)
+        && normalizePercent(sample.remainingPercent) !== null)
+        .map(({ at, remainingPercent }) => ({ at, remainingPercent }))];
+    }));
+  }
+
+  function updatePace(available, previous, now) {
+    const pace = normalizePace(previous);
+    for (const key of PACE_KEYS) {
+      const counter = available.find((item) => item.key === key);
+      if (!counter || !Number.isFinite(now)) {
+        pace[key] = [];
+        continue;
+      }
+      let samples = pace[key].filter((sample) => sample.at >= now - PACE_WINDOW_MS);
+      const last = samples.at(-1);
+      if (last && (now < last.at || now - last.at > PACE_MAX_GAP_MS
+        || counter.remainingPercent > last.remainingPercent)) samples = [];
+      // Repeated reads at one instant cannot establish a consumption rate.
+      if (samples.at(-1)?.at === now) samples.pop();
+      samples.push({ at: now, remainingPercent: counter.remainingPercent });
+      pace[key] = samples.slice(-121);
+    }
+    return pace;
+  }
+
+  function estimateTimeRemaining(rawPace, key, remainingPercent, now = Date.now()) {
+    const samples = normalizePace(rawPace)[key] || [];
+    const last = samples.at(-1);
+    if (!last || last.remainingPercent !== remainingPercent || now < last.at
+      || now - last.at > COUNTER_STALE_AFTER_MS) return { status: "unavailable" };
+    if (remainingPercent === 0) return { status: "exhausted" };
+    const recent = samples.filter((sample) => sample.at >= last.at - PACE_WINDOW_MS);
+    const first = recent[0];
+    if (recent.length < 2 || last.at - first.at < 60000) return { status: "learning" };
+    const consumed = first.remainingPercent - last.remainingPercent;
+    if (consumed <= 0) return { status: "idle" };
+    const durationMs = remainingPercent * (last.at - first.at) / consumed;
+    return { status: "estimated", durationMs };
+  }
+
+  function formatPaceEstimate(estimate) {
+    if (estimate.status === "exhausted") return "Limit reached";
+    if (estimate.status === "idle") return "No recent consumption";
+    if (estimate.status === "learning") return "Estimating pace…";
+    if (estimate.status !== "estimated") return "Estimate unavailable";
+    const minutes = Math.round(estimate.durationMs / 60000);
+    let duration;
+    if (minutes < 1) duration = "<1 min";
+    else if (minutes < 60) duration = `${minutes} min`;
+    else if (minutes < 1440) duration = `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+    else duration = `${Math.floor(minutes / 1440)} d${Math.floor(minutes % 1440 / 60) ? ` ${Math.floor(minutes % 1440 / 60)} h` : ""}`;
+    return `≈ ${duration} left at this pace`;
   }
 
   function extractFreshStateCounters(rawState, now = new Date().toISOString()) {
@@ -291,6 +355,8 @@
     deriveVisualState,
     detectTransition,
     evaluateSnapshot,
+    estimateTimeRemaining,
+    formatPaceEstimate,
     extractAvailableCounters,
     extractFreshStateCounters,
     normalizeMonitorState,

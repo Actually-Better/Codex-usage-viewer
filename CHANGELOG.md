@@ -4,6 +4,8 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Estimate time until the 5-hour and weekly limits run out using consumption between confirmed refreshes, with local history and explicit learning, idle, and unavailable states.
+
 - Preserve explicit zero credit balances instead of borrowing digits from nearby reset dates or times, and keep the toolbar badge synchronized with the latest visible Analytics percentage without treating that observation as a confirmed alert reading.
 - Add a locally persisted automatic-refresh slider covering every minute from 1 to 60, retaining 15 minutes as the default.
 - Add persisted remaining-capacity states for preventive (25%), configurable low/critical thresholds, exhausted (0%), and reset-to-100% transitions.
