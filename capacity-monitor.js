@@ -62,6 +62,7 @@
       version: 2,
       counters,
       pace: normalizePace(value.pace),
+      paceSessionId: typeof value.paceSessionId === "string" ? value.paceSessionId : null,
       availableKeys,
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
     };
@@ -81,7 +82,7 @@
     });
   }
 
-  function evaluateSnapshot(snapshot, previousState, rawSettings, now = new Date().toISOString()) {
+  function evaluateSnapshot(snapshot, previousState, rawSettings, now = new Date().toISOString(), paceSessionId = null) {
     const settings = normalizeSettings(rawSettings);
     const previous = normalizeMonitorState(previousState);
     const available = extractAvailableCounters(snapshot);
@@ -104,7 +105,8 @@
     const state = {
       version: 2,
       counters,
-      pace: updatePace(available, previous.pace, Date.parse(now)),
+      pace: updatePace(available, previous.pace, Date.parse(now), previous.paceSessionId === paceSessionId),
+      paceSessionId,
       availableKeys: available.map((counter) => counter.key),
       updatedAt: now
     };
@@ -117,11 +119,15 @@
       return [key, samples.slice(-121).filter((sample) => sample
         && Number.isFinite(sample.at)
         && normalizePercent(sample.remainingPercent) !== null)
-        .map(({ at, remainingPercent }) => ({ at, remainingPercent }))];
+        .map(({ at, remainingPercent, msPerPercent }) => ({
+          at,
+          remainingPercent,
+          ...(Number.isFinite(msPerPercent) && msPerPercent > 0 ? { msPerPercent } : {})
+        }))];
     }));
   }
 
-  function updatePace(available, previous, now) {
+  function updatePace(available, previous, now, sameSession) {
     const pace = normalizePace(previous);
     for (const key of PACE_KEYS) {
       const counter = available.find((item) => item.key === key);
@@ -129,45 +135,83 @@
         pace[key] = [];
         continue;
       }
-      let samples = pace[key].filter((sample) => sample.at >= now - PACE_WINDOW_MS);
-      const last = samples.at(-1);
-      if (last && (now < last.at || now - last.at > PACE_MAX_GAP_MS
-        || counter.remainingPercent > last.remainingPercent)) samples = [];
+      const last = pace[key].at(-1);
+      const continuous = sameSession && last && now >= last.at && now - last.at <= PACE_MAX_GAP_MS;
+      let samples = continuous ? pace[key].filter((sample) => sample.at >= now - PACE_WINDOW_MS) : [];
+      let seed = {};
+      if (last && counter.remainingPercent > last.remainingPercent) {
+        // The replenishment interval contains a reset, not measurable consumption.
+        // Project the new balance with the rate measured before that interval.
+        const prior = continuous ? estimateTimeRemaining(pace, key, last.remainingPercent, last.at) : null;
+        const measuredRate = prior && prior.status === "estimated" && last.remainingPercent > 0
+          ? prior.durationMs / last.remainingPercent
+          : continuous ? measuredMsPerPercent(pace[key]) : null;
+        seed = measuredRate ? { msPerPercent: measuredRate } : {};
+        samples = [];
+      }
       // Repeated reads at one instant cannot establish a consumption rate.
-      if (samples.at(-1)?.at === now) samples.pop();
-      samples.push({ at: now, remainingPercent: counter.remainingPercent });
+      if (samples.at(-1)?.at === now) {
+        const replaced = samples.pop();
+        seed = { ...replaced, ...seed };
+      }
+      samples.push({ ...seed, at: now, remainingPercent: counter.remainingPercent });
       pace[key] = samples.slice(-121);
     }
     return pace;
   }
 
-  function estimateTimeRemaining(rawPace, key, remainingPercent, now = Date.now()) {
-    const samples = normalizePace(rawPace)[key] || [];
+  function measuredMsPerPercent(samples) {
+    const last = samples.at(-1);
+    const recent = last ? samples.filter((sample) => sample.at >= last.at - PACE_WINDOW_MS) : [];
+    const first = recent[0];
+    if (recent.length < 2 || last.at - first.at < 60000) return null;
+    const consumed = first.remainingPercent - last.remainingPercent;
+    return consumed > 0 ? (last.at - first.at) / consumed : null;
+  }
+
+  function estimateTimeRemaining(rawPace, key, remainingPercent, now = Date.now(), sameSession = true) {
+    let samples = normalizePace(rawPace)[key] || [];
     const last = samples.at(-1);
     if (!last || last.remainingPercent !== remainingPercent || now < last.at
       || now - last.at > COUNTER_STALE_AFTER_MS) return { status: "unavailable" };
     if (remainingPercent === 0) return { status: "exhausted" };
+    if (!sameSession) samples = [{ at: last.at, remainingPercent: last.remainingPercent }];
     const recent = samples.filter((sample) => sample.at >= last.at - PACE_WINDOW_MS);
     const first = recent[0];
-    if (recent.length < 2 || last.at - first.at < 60000) return { status: "learning" };
+    if (recent.length < 2 || last.at - first.at < 60000) {
+      if (first.msPerPercent) return { status: "estimated", durationMs: remainingPercent * first.msPerPercent };
+      const windowMs = key === "codex5h" ? 5 * 3600000 : 7 * 24 * 3600000;
+      return { status: "nominal", durationMs: remainingPercent / 100 * windowMs };
+    }
     const consumed = first.remainingPercent - last.remainingPercent;
     if (consumed <= 0) return { status: "idle" };
     const durationMs = remainingPercent * (last.at - first.at) / consumed;
     return { status: "estimated", durationMs };
   }
 
+  function limitEstimateToReset(estimate, resetAt, now = Date.now()) {
+    if (!Number.isFinite(resetAt) || !Number.isFinite(estimate.durationMs)) return estimate;
+    const untilReset = Math.max(0, resetAt - now);
+    return untilReset <= estimate.durationMs
+      ? { status: "reset-bound", durationMs: untilReset } : estimate;
+  }
+
   function formatPaceEstimate(estimate) {
     if (estimate.status === "exhausted") return "Limit reached";
     if (estimate.status === "idle") return "No recent consumption";
-    if (estimate.status === "learning") return "Estimating pace…";
-    if (estimate.status !== "estimated") return "Estimate unavailable";
-    const minutes = Math.round(estimate.durationMs / 60000);
+    if (!["estimated", "nominal", "reset-bound"].includes(estimate.status)) return "Estimate unavailable";
+    if (estimate.status === "reset-bound" && estimate.durationMs === 0) return "Reset due · refresh usage";
+    const minutes = Math.floor(estimate.durationMs / 60000);
     let duration;
-    if (minutes < 1) duration = "<1 min";
+    if (estimate.status === "nominal" && minutes === 7 * 24 * 60) duration = "1 week";
+    else if (minutes < 1) duration = "<1 min";
     else if (minutes < 60) duration = `${minutes} min`;
     else if (minutes < 1440) duration = `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
     else duration = `${Math.floor(minutes / 1440)} d${Math.floor(minutes % 1440 / 60) ? ` ${Math.floor(minutes % 1440 / 60)} h` : ""}`;
-    return `≈ ${duration} left at this pace`;
+    if (estimate.status === "reset-bound") return `≈ ${duration} left · resets then`;
+    return estimate.status === "nominal"
+      ? `≈ ${duration} left · initial estimate`
+      : `≈ ${duration} left at this pace`;
   }
 
   function extractFreshStateCounters(rawState, now = new Date().toISOString()) {
@@ -357,6 +401,7 @@
     evaluateSnapshot,
     estimateTimeRemaining,
     formatPaceEstimate,
+    limitEstimateToReset,
     extractAvailableCounters,
     extractFreshStateCounters,
     normalizeMonitorState,

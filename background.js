@@ -23,6 +23,7 @@ let analyticsRefreshPromise = null;
 let analyticsRefreshContext = null;
 let analyticsRefreshGeneration = 0;
 let retainedSignInTabUpdate = Promise.resolve();
+let paceSessionPromise = null;
 let capacityUpdate = Promise.resolve();
 let capacityInitializationPromise = Promise.resolve();
 let capacityGeneration = 0;
@@ -217,7 +218,7 @@ async function getPopupState() {
     await applyObservedCapacityVisual(nextState.snapshot);
   }
   refreshIfStale("popup-open", nextState).catch(() => {});
-  return { ok: true, state: nextState };
+  return { ok: true, state: nextState, paceSessionId: await getPaceSessionId() };
 }
 
 async function refreshForPopup() {
@@ -885,6 +886,23 @@ async function applyObservedCapacityVisualSerialized(snapshot) {
   return { visual };
 }
 
+function getPaceSessionId() {
+  if (!paceSessionPromise) {
+    paceSessionPromise = (async () => {
+      const key = storageKeys.paceSessionId;
+      const session = await chrome.storage.session.get([key]);
+      if (session[key]) return session[key];
+      const id = `${Date.now()}-${Math.random()}`;
+      await chrome.storage.session.set({ [key]: id });
+      return id;
+    })().catch((error) => {
+      paceSessionPromise = null;
+      throw error;
+    });
+  }
+  return paceSessionPromise;
+}
+
 async function processCapacitySnapshotSerialized(
   snapshot,
   expectedCapacityGeneration,
@@ -896,6 +914,7 @@ async function processCapacitySnapshotSerialized(
   if (!isCurrentAnalyticsRefreshGeneration(expectedAnalyticsRefreshGeneration)) {
     return { ignored: true, reason: "Analytics refresh expired before capacity processing." };
   }
+  const paceSessionId = await getPaceSessionId();
   const data = await chrome.storage.local.get([
     storageKeys.capacitySettings,
     storageKeys.capacityState
@@ -909,7 +928,9 @@ async function processCapacitySnapshotSerialized(
   const evaluation = CodexCapacityMonitor.evaluateSnapshot(
     snapshot,
     data[storageKeys.capacityState],
-    data[storageKeys.capacitySettings]
+    data[storageKeys.capacitySettings],
+    new Date().toISOString(),
+    paceSessionId
   );
   const storageUpdate = { [storageKeys.capacityState]: evaluation.state };
   await chrome.storage.local.set(storageUpdate);
@@ -1018,6 +1039,7 @@ async function expireCapacityMonitorStateSerialized() {
     counters,
     availableKeys: previous.availableKeys.filter((key) => counters[key]),
     pace: previous.pace,
+    paceSessionId: previous.paceSessionId,
     updatedAt: new Date().toISOString()
   };
   await chrome.storage.local.set({ [storageKeys.capacityState]: state });

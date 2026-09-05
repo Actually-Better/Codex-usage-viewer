@@ -4,6 +4,10 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Cap every numeric remaining-time estimate at the visible reset deadline, preserving English/Spanish reset dates and relative durations and updating the cap while the popup stays open.
+
+- After a reset within the current browser session, project the restored capacity using the previous consumption rate until the next measurement. Without a measured rate in the current session, show a clearly provisional estimate proportional to the remaining percentage of the 5-hour or weekly window.
+
 - Estimate time until the 5-hour and weekly limits run out using consumption between confirmed refreshes, with local history and explicit learning, idle, and unavailable states.
 
 - Preserve explicit zero credit balances instead of borrowing digits from nearby reset dates or times, and keep the toolbar badge synchronized with the latest visible Analytics percentage without treating that observation as a confirmed alert reading.

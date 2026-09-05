@@ -5,11 +5,11 @@ const { CodexCapacityMonitor: monitor } = require("../capacity-monitor.js");
 const start = Date.parse("2026-09-05T08:00:00Z");
 const minute = 60000;
 
-function refresh(state, minutes, values) {
+function refresh(state, minutes, values, sessionId = null) {
   const usage = Object.fromEntries(Object.entries(values).map(([key, remainingPercent]) => [
     key, { structured: { remainingPercent } }
   ]));
-  return monitor.evaluateSnapshot({ usage }, state, {}, new Date(start + minutes * minute).toISOString()).state;
+  return monitor.evaluateSnapshot({ usage }, state, {}, new Date(start + minutes * minute).toISOString(), sessionId).state;
 }
 
 function estimate(state, minutes, key = "codex5h", percent = state.counters[key]?.remainingPercent) {
@@ -24,13 +24,32 @@ test("each limit estimates exhaustion from its own confirmed refreshes", () => {
   assert.equal(monitor.formatPaceEstimate(estimate(state, 15)), "≈ 1 h 45 min left at this pace");
 });
 
-test("first and near-simultaneous readings cannot invent a pace", () => {
+test("first and near-simultaneous readings use a proportional initial estimate", () => {
   let state = refresh(null, 0, { codex5h: 80 });
-  assert.equal(estimate(state, 0).status, "learning");
+  assert.equal(estimate(state, 0).status, "nominal");
   state = refresh(state, 0, { codex5h: 79 });
   assert.equal(state.pace.codex5h.length, 1);
   state = refresh(state, 0.5, { codex5h: 78 });
-  assert.equal(estimate(state, 0.5).status, "learning");
+  assert.equal(estimate(state, 0.5).status, "nominal");
+});
+
+test("half a window initially shows 2.5 hours or 3.5 days, then uses measured pace", () => {
+  let state = refresh(null, 0, { codex5h: 50, codexWeekly: 50 }, "new-session");
+  assert.equal(estimate(state, 0).durationMs, 150 * minute);
+  assert.equal(monitor.formatPaceEstimate(estimate(state, 0)), "≈ 2 h 30 min left · initial estimate");
+  assert.equal(estimate(state, 0, "codexWeekly").durationMs, 3.5 * 24 * 60 * minute);
+  assert.equal(monitor.formatPaceEstimate(estimate(state, 0, "codexWeekly")), "≈ 3 d 12 h left · initial estimate");
+  state = refresh(state, 15, { codex5h: 40, codexWeekly: 45 }, "new-session");
+  assert.equal(estimate(state, 15).durationMs, 60 * minute);
+  assert.equal(estimate(state, 15, "codexWeekly").durationMs, 135 * minute);
+});
+
+test("cached data from a previous browser session uses the proportional estimate before refresh", () => {
+  let state = refresh(null, 0, { codex5h: 60 }, "old");
+  state = refresh(state, 15, { codex5h: 50 }, "old");
+  const result = monitor.estimateTimeRemaining(state.pace, "codex5h", 50, start + 20 * minute, false);
+  assert.equal(result.status, "nominal");
+  assert.equal(result.durationMs, 150 * minute);
 });
 
 test("flat usage is idle and exhaustion needs no calculated rate", () => {
@@ -42,12 +61,61 @@ test("flat usage is idle and exhaustion needs no calculated rate", () => {
   assert.equal(monitor.formatPaceEstimate(estimate(state, 30)), "Limit reached");
 });
 
-test("capacity recovery restarts only the affected limit", () => {
+test("a reset projects 100 percent at the previous pace and the next reading adjusts it", () => {
   let state = refresh(null, 0, { codex5h: 20, codexWeekly: 80 });
   state = refresh(state, 15, { codex5h: 10, codexWeekly: 70 });
   state = refresh(state, 30, { codex5h: 100, codexWeekly: 60 });
-  assert.equal(estimate(state, 30).status, "learning");
+  assert.equal(estimate(state, 30).durationMs, 150 * minute);
   assert.equal(estimate(state, 30, "codexWeekly").durationMs, 90 * minute);
+  state = refresh(state, 45, { codex5h: 80, codexWeekly: 50 });
+  assert.equal(estimate(state, 45).durationMs, 60 * minute);
+});
+
+test("a zero-to-100 reset reuses the pace measured before exhaustion", () => {
+  let state = refresh(null, 0, { codex5h: 10 });
+  state = refresh(state, 15, { codex5h: 0 });
+  state = refresh(state, 30, { codex5h: 100 });
+  assert.equal(estimate(state, 30).durationMs, 150 * minute);
+});
+
+test("a higher balance in a new browser session starts with the nominal windows", () => {
+  let state = refresh(null, 0, { codex5h: 80, codexWeekly: 90 }, "first-session");
+  state = refresh(state, 15, { codex5h: 70, codexWeekly: 85 }, "first-session");
+  state = refresh(state, 30, { codex5h: 95, codexWeekly: 100 }, "second-session");
+  assert.equal(estimate(state, 30).status, "nominal");
+  assert.equal(estimate(state, 30).durationMs, 285 * minute);
+  assert.equal(estimate(state, 30, "codexWeekly").durationMs, 7 * 24 * 60 * minute);
+  assert.equal(monitor.formatPaceEstimate(estimate(state, 30)), "≈ 4 h 45 min left · initial estimate");
+  assert.equal(monitor.formatPaceEstimate(estimate(state, 30, "codexWeekly")), "≈ 1 week left · initial estimate");
+  state = refresh(state, 45, { codex5h: 85, codexWeekly: 95 }, "second-session");
+  assert.equal(estimate(state, 45).durationMs, 127.5 * minute);
+  assert.equal(estimate(state, 45, "codexWeekly").durationMs, 285 * minute);
+});
+
+test("long gaps discard the old rate but still recognize a recovered balance", () => {
+  let state = refresh(null, 0, { codex5h: 80 });
+  state = refresh(state, 15, { codex5h: 70 });
+  state = refresh(state, 300, { codex5h: 100 });
+  assert.equal(estimate(state, 300).status, "nominal");
+});
+
+test("an inherited estimate survives worker state serialization within the browser session", () => {
+  let state = refresh(null, 0, { codex5h: 80 }, "session");
+  state = refresh(state, 15, { codex5h: 70 }, "session");
+  state = refresh(state, 30, { codex5h: 100 }, "session");
+  state = monitor.normalizeMonitorState(JSON.parse(JSON.stringify(state)));
+  assert.equal(estimate(state, 30).durationMs, 150 * minute);
+  state = refresh(state, 45, { codex5h: 90 }, "session");
+  assert.equal(estimate(state, 45).durationMs, 135 * minute);
+});
+
+test("no measured prior consumption uses a provisional window until the next reading", () => {
+  let state = refresh(null, 0, { codex5h: 50 });
+  state = refresh(state, 15, { codex5h: 50 });
+  state = refresh(state, 30, { codex5h: 100 });
+  assert.equal(estimate(state, 30).status, "nominal");
+  state = refresh(state, 45, { codex5h: 100 });
+  assert.equal(estimate(state, 45).status, "idle");
 });
 
 test("missing counters restart history and do not fabricate estimates", () => {
@@ -55,7 +123,7 @@ test("missing counters restart history and do not fabricate estimates", () => {
   state = refresh(state, 15, {});
   assert.equal(estimate(state, 15).status, "unavailable");
   state = refresh(state, 30, { codex5h: 60 });
-  assert.equal(estimate(state, 30).status, "learning");
+  assert.equal(estimate(state, 30).status, "nominal");
 });
 
 test("stale or mismatched displayed values never reuse a confirmed estimate", () => {
@@ -71,7 +139,7 @@ test("one-hour refresh intervals retain pace independently of alert expiration",
   state = refresh(state, 60, { codex5h: 60 });
   assert.equal(estimate(state, 60).durationMs, 180 * minute);
   state = refresh(state, 151, { codex5h: 40 });
-  assert.equal(estimate(state, 151).status, "learning");
+  assert.equal(estimate(state, 151).status, "nominal");
 });
 
 test("recent pace includes idle intervals and drops old consumption", () => {
@@ -102,7 +170,7 @@ test("pace survives storage serialization and keeps bounded local metadata", () 
 test("clock reversal restarts collection instead of deriving a negative rate", () => {
   let state = refresh(null, 30, { codex5h: 80 });
   state = refresh(state, 15, { codex5h: 70 });
-  assert.equal(estimate(state, 15).status, "learning");
+  assert.equal(estimate(state, 15).status, "nominal");
 });
 
 test("formatting covers short durations, hour/day boundaries and missing history", () => {

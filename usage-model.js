@@ -8,7 +8,8 @@
       retainedSignInTab: "chatgptUsageMonitor.retainedSignInTab",
       refreshPeriodMinutes: "chatgptUsageMonitor.refreshPeriodMinutes",
       capacitySettings: "chatgptUsageMonitor.capacitySettings",
-      capacityState: "chatgptUsageMonitor.capacityState"
+      capacityState: "chatgptUsageMonitor.capacityState",
+      paceSessionId: "chatgptUsageMonitor.paceSessionId"
     },
     refreshAlarmName: "chatgpt-usage-monitor-refresh",
     refreshPeriodMinutes: 15,
@@ -575,19 +576,71 @@
     if (!value) return null;
     const text = String(value)
       .replace(/\s+/g, " ")
-      .replace(/[.;|].*$/, "")
+      .replace(/[;|].*$/, "")
       .trim();
     const patterns = [
+      /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)/i,
+      /^((?:today|tomorrow|hoy|ma[nñ]ana)[, ]+(?:(?:at|a las)\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
+      /^((?:(?:in|en)\s+)?(?:\d+(?:[.,]\d+)?\s*(?:weeks?|semanas?|days?|dias?|días?|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b[\s,]*(?:(?:and|y)\s+)?)+)/i,
       /^(\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
-      /^(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
-      /^([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4},?\s+\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
-      /(\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i
+      /^(\d{1,2}\s+(?:de\s+)?\w+\.?(?:\s+(?:de\s+)?\d{4})?[, ]+(?:(?:at|a las)\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
+      /^([A-Z][a-z]{2,9}\.?\s+\d{1,2},?(?:\s+\d{4},?)?\s+(?:at\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
       if (match) return match[1].trim();
     }
     return null;
+  }
+
+  function parseResetAt(resetText, observedAt) {
+    if (!Number.isFinite(observedAt)) return null;
+    const text = normalizeForMatch(resetText).trim().replace(/^(?:in|en|at|on|a las|el)\s+/, "");
+    if (/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:\d{2})?$/.test(text)) {
+      const parsed = Date.parse(text);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    const units = /(\d+(?:[.,]\d+)?)\s*(weeks?|semanas?|days?|dias?|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b/g;
+    const durations = [...text.matchAll(units)];
+    if (durations.length && !text.replace(units, "").replace(/\b(?:and|y)\b/g, "").replace(/[\s,]/g, "")) {
+      const durationMs = durations.reduce((total, [, amount, unit]) => {
+        const factor = /^(?:w|sem)/.test(unit) ? 7 * ONE_DAY_MS
+          : /^d/.test(unit) ? ONE_DAY_MS : /^h/.test(unit) ? ONE_HOUR_MS
+            : /^m/.test(unit) ? 60000 : 1000;
+        return total + Number(amount.replace(",", ".")) * factor;
+      }, 0);
+      return observedAt + durationMs;
+    }
+    const time = text.match(/^(.*?)\b(\d{1,2}):(\d{2})\s*(am|pm)?$/);
+    if (!time) return null;
+    let hours = Number(time[2]);
+    const minutes = Number(time[3]);
+    if (minutes > 59 || hours > 23 || (time[4] && (hours < 1 || hours > 12))) return null;
+    if (time[4]) hours = hours % 12 + (time[4] === "pm" ? 12 : 0);
+    const prefix = time[1].replace(/\b(?:at|a las|de)\b/g, " ").replace(/[,.]/g, " ").trim().replace(/\s+/g, " ");
+    const observed = new Date(observedAt);
+    const result = new Date(observedAt);
+    result.setHours(hours, minutes, 0, 0);
+    if (!prefix || /^(?:today|tomorrow|hoy|manana)$/.test(prefix)) {
+      if (/^(?:tomorrow|manana)$/.test(prefix)
+        || (!prefix && result.getTime() < observedAt - 60000)) result.setDate(result.getDate() + 1);
+      return result.getTime();
+    }
+    const date = prefix.match(/^(?:(\d{1,2}) ([a-z]+)|([a-z]+) (\d{1,2}))(?: (\d{4}))?$/);
+    if (!date) return null;
+    const months = { jan: 0, ene: 0, feb: 1, mar: 2, apr: 3, abr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, ago: 7, sep: 8, set: 8, oct: 9, nov: 10, dec: 11, dic: 11 };
+    const month = months[(date[2] || date[3]).slice(0, 3)];
+    const day = Number(date[1] || date[4]);
+    if (month === undefined || day < 1 || day > 31) return null;
+    result.setFullYear(date[5] ? Number(date[5]) : observed.getFullYear(), month, day);
+    if (result.getMonth() !== month || result.getDate() !== day) return null;
+    if (!date[5] && result.getTime() < observedAt - 60000) {
+      const nextYear = new Date(result);
+      nextYear.setFullYear(nextYear.getFullYear() + 1);
+      if (nextYear.getTime() - observedAt <= 7 * ONE_DAY_MS) return nextYear.getTime();
+    }
+    return result.getTime();
   }
 
   function visibleField(snippet, structured, confidence = "medium") {
@@ -677,6 +730,7 @@
     normalizeRefreshPeriodMinutes,
     normalizeMetricField,
     parseCodexUsageText,
+    parseResetAt,
     summarizeAvailability
   };
 

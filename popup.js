@@ -23,6 +23,8 @@
   let latestRefreshTimestamp = null;
   let latestSnapshot = null;
   let latestPace = null;
+  let latestCapacitySessionId = null;
+  let currentPaceSessionId = null;
 
   refreshButton.addEventListener("click", () => refresh(true));
   openUsageButton.addEventListener("click", openUsagePage);
@@ -48,6 +50,7 @@
     const capacityChange = changes[ChatGPTUsageConfig.storageKeys.capacityState];
     if (capacityChange) {
       latestPace = capacityChange.newValue && capacityChange.newValue.pace;
+      latestCapacitySessionId = capacityChange.newValue && capacityChange.newValue.paceSessionId;
       renderCodexCards(latestSnapshot);
     }
     const settingsChange = changes[ChatGPTUsageConfig.storageKeys.capacitySettings];
@@ -70,7 +73,9 @@
     const key = ChatGPTUsageConfig.storageKeys.capacityState;
     const stored = await chrome.storage.local.get([key]);
     latestPace = stored[key] && stored[key].pace;
+    latestCapacitySessionId = stored[key] && stored[key].paceSessionId;
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
+    currentPaceSessionId = response && response.paceSessionId;
     renderState(response && response.state);
   }
 
@@ -324,12 +329,25 @@
     if ((key === "codex5h" || key === "codexWeekly") && hasMetricData(snapshot, key)) {
       const estimate = document.createElement("div");
       estimate.className = "metric-estimate";
-      const remaining = field.structured && field.structured.remainingPercent;
-      const result = CodexCapacityMonitor.estimateTimeRemaining(
-        snapshot.loginStatus === "logged-in" ? latestPace : null, key, remaining
+      const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
+      const remaining = structured.remainingPercent;
+      let result = CodexCapacityMonitor.estimateTimeRemaining(
+        snapshot.loginStatus === "logged-in" ? latestPace : null, key, remaining, Date.now(),
+        Boolean(currentPaceSessionId && latestCapacitySessionId === currentPaceSessionId)
       );
+      if (structured.resetText) {
+        const resetAt = ChatGPTUsageModel.parseResetAt(
+          structured.resetText, Date.parse(snapshot.collectedAt || latestRefreshTimestamp)
+        );
+        result = resetAt === null ? { status: "unavailable" }
+          : CodexCapacityMonitor.limitEstimateToReset(result, resetAt);
+      }
       estimate.textContent = CodexCapacityMonitor.formatPaceEstimate(result);
-      estimate.title = "Based on consumption between confirmed refreshes over the last 2 hours. Measured from the latest refresh, assuming the same pace and no reset.";
+      estimate.title = result.status === "reset-bound"
+        ? "Capped at the time remaining until the reset shown by Analytics."
+        : result.status === "nominal"
+        ? "Initial estimate: remaining percentage × the 5-hour or weekly window. The next refresh will adjust it using measured consumption."
+        : "Based on consumption between confirmed refreshes over the last 2 hours. A reset during the session carries the previous pace forward until a new rate is measured. Measured from the latest refresh.";
       card.append(estimate);
     }
     section.append(card);

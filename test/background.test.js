@@ -18,7 +18,8 @@ function createBackgroundHarness({ tabs = [], snapshot = null, sendError = null,
     [ChatGPTUsageConfig.storageKeys.capacityState]: capacityState
   };
   const sessionStorage = {
-    [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId
+    [ChatGPTUsageConfig.storageKeys.retainedSignInTab]: retainedSignInTabId,
+    [ChatGPTUsageConfig.storageKeys.paceSessionId]: "test-session"
   };
   const calls = { create: 0, createArgs: [], remove: 0, removedTabIds: [], update: 0, updateArgs: [], windowUpdate: 0, windowUpdateArgs: [], sendMessage: 0, messages: [], soundMessages: [], alarmCreate: 0, alarmCreateArgs: [], badgeText: [], badgeColor: [], badgeTextColor: [], badgeDraws: [], badgeTypography: [], actionIcon: [], actionTitle: [], notifications: [], clearedNotifications: [], notificationEvents: [] };
   const listeners = {};
@@ -930,7 +931,7 @@ test("alert expiration preserves pace for hourly refreshes, while sign-out clear
   const now = Date.now();
   const baseline = CodexCapacityMonitor.evaluateSnapshot({
     usage: { codex5h: { structured: { remainingPercent: 80 } } }
-  }, null, {}, new Date(now - 60 * 60000).toISOString());
+  }, null, {}, new Date(now - 60 * 60000).toISOString(), "test-session");
   const harness = createBackgroundHarness({ capacityState: baseline.state });
   await new Promise((resolve) => setImmediate(resolve));
   await harness.run("expireCapacityMonitorState()");
@@ -945,6 +946,37 @@ test("alert expiration preserves pace for hourly refreshes, while sign-out clear
   await harness.run('saveContentSnapshot({ loginStatus: "logged-out" }, { id: 7 })');
   stored = harness.storage[ChatGPTUsageConfig.storageKeys.capacityState];
   assert.equal(CodexCapacityMonitor.estimateTimeRemaining(stored.pace, "codex5h", 60).status, "unavailable");
+});
+
+test("browser session storage selects inherited pace or a provisional window after reset", async () => {
+  const now = Date.now();
+  const snapshot = (remainingPercent) => ({ usage: { codex5h: { structured: { remainingPercent } } } });
+  let baseline = CodexCapacityMonitor.evaluateSnapshot(snapshot(80), null, {},
+    new Date(now - 30 * 60000).toISOString(), "test-session").state;
+  baseline = CodexCapacityMonitor.evaluateSnapshot(snapshot(70), baseline, {},
+    new Date(now - 15 * 60000).toISOString(), "test-session").state;
+  const sameSession = createBackgroundHarness({ capacityState: baseline });
+  await new Promise((resolve) => setImmediate(resolve));
+  await sameSession.run('processCapacitySnapshot({ usage: { codex5h: { structured: { remainingPercent: 100 } } } })');
+  const stored = sameSession.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.equal(stored.paceSessionId, "test-session");
+  assert.equal(CodexCapacityMonitor.estimateTimeRemaining(stored.pace, "codex5h", 100).durationMs, 150 * 60000);
+
+  const restartedWorker = createBackgroundHarness({ capacityState: stored });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(restartedWorker.sessionStorage[ChatGPTUsageConfig.storageKeys.paceSessionId], stored.paceSessionId);
+  assert.equal(CodexCapacityMonitor.estimateTimeRemaining(
+    restartedWorker.storage[ChatGPTUsageConfig.storageKeys.capacityState].pace, "codex5h", 100
+  ).durationMs, 150 * 60000);
+
+  const newSession = createBackgroundHarness({ capacityState: baseline });
+  delete newSession.sessionStorage[ChatGPTUsageConfig.storageKeys.paceSessionId];
+  await new Promise((resolve) => setImmediate(resolve));
+  await newSession.run('processCapacitySnapshot({ usage: { codex5h: { structured: { remainingPercent: 100 } } } })');
+  const newStored = newSession.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.notEqual(newStored.paceSessionId, "test-session");
+  assert.equal(newStored.paceSessionId, newSession.sessionStorage[ChatGPTUsageConfig.storageKeys.paceSessionId]);
+  assert.equal(CodexCapacityMonitor.estimateTimeRemaining(newStored.pace, "codex5h", 100).status, "nominal");
 });
 
 test("a transient optional counter stays in popup data but cannot alert", async () => {
