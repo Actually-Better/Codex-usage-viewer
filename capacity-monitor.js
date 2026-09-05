@@ -212,6 +212,7 @@
   }
 
   function formatPaceEstimate(estimate) {
+    if (estimate.status === "reload-required") return "Reload extension for estimate";
     if (estimate.status === "exhausted") return "Limit reached";
     if (estimate.status === "idle") return "No recent consumption";
     if (!["estimated", "nominal", "reset-bound"].includes(estimate.status)) return "Estimate unavailable";
@@ -227,6 +228,22 @@
     return estimate.status === "nominal"
       ? `≈ ${duration} left · initial estimate`
       : `≈ ${duration} left at this pace`;
+  }
+
+  function formatPaceTooltip(estimate, key) {
+    const limit = key === "codexWeekly" ? "weekly" : "5-hour";
+    if (estimate.status === "reload-required") {
+      return `Reload the extension to enable ${limit} pace tracking. Refresh is still using an older background version.`;
+    }
+    if (estimate.status === "nominal") {
+      const window = key === "codexWeekly" ? "1 week" : "5 hours";
+      return `Initial ${limit} estimate: remaining percentage × ${window}. No ${limit} consumption rate has been measured yet. Confirmed refreshes will replace this starting estimate.`;
+    }
+    if (estimate.status === "reset-bound") return `Capped at the time remaining until the ${limit} reset shown by Analytics.`;
+    if (estimate.status === "idle") return `No decrease in ${limit} capacity was detected between recent confirmed refreshes.`;
+    if (estimate.status === "exhausted") return `The ${limit} limit has been reached.`;
+    if (estimate.status !== "estimated") return `A recent ${limit} reading and a readable reset time are needed to show this estimate.`;
+    return `Based on ${limit} consumption measured between confirmed refreshes over the last 2 hours. A ${limit} reset carries the previous pace forward until a new rate is measured. Measured from the latest refresh.`;
   }
 
   function extractFreshStateCounters(rawState, now = new Date().toISOString()) {
@@ -417,6 +434,7 @@
     estimateTimeRemaining,
     estimateDisplayedTimeRemaining,
     formatPaceEstimate,
+    formatPaceTooltip,
     limitEstimateToReset,
     extractAvailableCounters,
     extractFreshStateCounters,

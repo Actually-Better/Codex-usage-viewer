@@ -179,6 +179,19 @@
         font-weight: 700;
       }
 
+      .pace-reload-notice {
+        margin-top: 10px;
+        padding: 10px;
+        border-radius: 8px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 11px;
+      }
+
+      .pace-reload-notice button {
+        margin-top: 6px;
+      }
+
       section {
         margin: 0;
       }
@@ -591,6 +604,11 @@
           <span id="statusAge">Last refresh: unavailable</span>
           <button id="refreshButton" type="button">Refresh</button>
         </div>
+      </div>
+
+      <div id="paceReloadNotice" class="pace-reload-notice" hidden>
+        <div>Reload the extension once to enable consumption estimates from your refreshes.</div>
+        <button id="reloadExtensionButton" type="button">Reload extension</button>
       </div>
 
       <section class="account-section">

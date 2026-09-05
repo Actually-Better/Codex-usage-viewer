@@ -212,3 +212,25 @@ test("formatting covers short durations, hour/day boundaries and missing history
   assert.equal(monitor.estimateTimeRemaining(null, "codex5h", 30).status, "unavailable");
   assert.equal(monitor.estimateTimeRemaining({ codex5h: [null, { at: NaN, remainingPercent: 40 }] }, "codex5h", 30).status, "unavailable");
 });
+
+test("each tooltip refers only to the limit where it is displayed", () => {
+  for (const status of ["nominal", "estimated", "idle", "exhausted", "unavailable", "reset-bound", "reload-required"]) {
+    const weekly = monitor.formatPaceTooltip({ status }, "codexWeekly");
+    const fiveHour = monitor.formatPaceTooltip({ status }, "codex5h");
+    assert.match(weekly, /weekly/i);
+    assert.doesNotMatch(weekly, /5.hour|5h/i);
+    assert.match(fiveHour, /5-hour/i);
+    assert.doesNotMatch(fiveHour, /week/i);
+  }
+});
+
+test("measured weekly consumption takes precedence over the 7-percent proportional duration", () => {
+  let state = refresh(null, 0, { codexWeekly: 15 }, "session");
+  for (const [minutes, percent] of [[15, 13], [30, 12], [45, 10], [60, 9], [75, 8], [90, 7], [105, 7]]) {
+    state = refresh(state, minutes, { codexWeekly: percent }, "session");
+  }
+  const result = monitor.estimateDisplayedTimeRemaining(state.pace, "codexWeekly", 7, start + 105 * minute, start + 105 * minute);
+  assert.equal(result.status, "estimated");
+  assert.equal(result.durationMs, 7 / 8 * 105 * minute);
+  assert.equal(monitor.formatPaceEstimate(result), "≈ 1 h 31 min left at this pace");
+});

@@ -2,6 +2,8 @@
   "use strict";
 
   const refreshButton = document.getElementById("refreshButton");
+  const reloadExtensionButton = document.getElementById("reloadExtensionButton");
+  const paceReloadNotice = document.getElementById("paceReloadNotice");
   const openUsageButton = document.getElementById("openUsageButton");
   const copyDiagnosticsButton = document.getElementById("copyDiagnosticsButton");
   const statusTitle = document.getElementById("statusTitle");
@@ -25,8 +27,10 @@
   let latestPace = null;
   let latestCapacitySessionId = null;
   let currentPaceSessionId = null;
+  let requiresExtensionReload = false;
 
   refreshButton.addEventListener("click", () => refresh(true));
+  reloadExtensionButton.addEventListener("click", () => chrome.runtime.reload());
   openUsageButton.addEventListener("click", openUsagePage);
   copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
   for (const input of Object.values(capacitySettingInputs)) {
@@ -76,6 +80,8 @@
     latestCapacitySessionId = stored[key] && stored[key].paceSessionId;
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
     currentPaceSessionId = response && response.paceSessionId;
+    requiresExtensionReload = Boolean(response && response.state && !currentPaceSessionId);
+    paceReloadNotice.hidden = !requiresExtensionReload;
     renderState(response && response.state);
   }
 
@@ -332,11 +338,11 @@
       const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
       const remaining = structured.remainingPercent;
       const observedAt = Date.parse(snapshot.collectedAt || latestRefreshTimestamp);
-      let result = CodexCapacityMonitor.estimateDisplayedTimeRemaining(
+      let result = requiresExtensionReload ? { status: "reload-required" } : CodexCapacityMonitor.estimateDisplayedTimeRemaining(
         latestPace, key, remaining, snapshot.loginStatus === "logged-in" ? observedAt : NaN, Date.now(),
         Boolean(currentPaceSessionId && latestCapacitySessionId === currentPaceSessionId)
       );
-      if (structured.resetText) {
+      if (structured.resetText && !requiresExtensionReload) {
         const resetAt = ChatGPTUsageModel.parseResetAt(
           structured.resetText, observedAt
         );
@@ -344,11 +350,7 @@
           : CodexCapacityMonitor.limitEstimateToReset(result, resetAt);
       }
       estimate.textContent = CodexCapacityMonitor.formatPaceEstimate(result);
-      estimate.title = result.status === "reset-bound"
-        ? "Capped at the time remaining until the reset shown by Analytics."
-        : result.status === "nominal"
-        ? "Initial estimate: remaining percentage × the 5-hour or weekly window. Confirmed refreshes will replace it with measured consumption."
-        : "Based on consumption between confirmed refreshes over the last 2 hours. A reset during the session carries the previous pace forward until a new rate is measured. Measured from the latest refresh.";
+      estimate.title = CodexCapacityMonitor.formatPaceTooltip(result, key);
       card.append(estimate);
     }
     section.append(card);

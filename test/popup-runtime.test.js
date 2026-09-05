@@ -9,6 +9,7 @@ const { CodexCapacityMonitor } = require("../capacity-monitor.js");
 class Element {
   constructor() {
     this.children = [];
+    this.listeners = {};
     this.className = "";
     this.style = { setProperty() {} };
     this.classList = { add: (...names) => { this.className += ` ${names.join(" ")}`; } };
@@ -17,11 +18,11 @@ class Element {
   get textContent() { return (this.text || "") + this.children.map((child) => child.textContent).join(""); }
   get childElementCount() { return this.children.length; }
   append(...children) { this.children.push(...children); }
-  addEventListener() {}
+  addEventListener(name, callback) { this.listeners[name] = callback; }
   setAttribute() {}
 }
 
-async function openPopup() {
+async function openPopup({ legacyBackground = false } = {}) {
   let now = Date.parse("2026-09-05T16:00:00Z");
   const snapshot = {
     loginStatus: "logged-in", hostname: "chatgpt.com", domUsageVisible: true,
@@ -34,6 +35,7 @@ async function openPopup() {
   const elements = new Map();
   let onChange;
   let tick;
+  let reloads = 0;
   const document = {
     createElement: () => new Element(),
     getElementById(id) {
@@ -49,7 +51,10 @@ async function openPopup() {
     },
     setInterval(callback) { tick = callback; },
     chrome: {
-      runtime: { async sendMessage() { return { state, paceSessionId: "session" }; } },
+      runtime: {
+        async sendMessage() { return legacyBackground ? { state } : { state, paceSessionId: "session" }; },
+        reload() { reloads += 1; }
+      },
       storage: { local: { async get() { return {}; } }, onChanged: { addListener(fn) { onChange = fn; } } }
     }
   });
@@ -61,6 +66,8 @@ async function openPopup() {
     ? element.textContent : element.children.map(findEstimate).find(Boolean);
   return {
     snapshot, state,
+    elements,
+    reloads: () => reloads,
     text: () => findEstimate(document.getElementById("primaryLimits")),
     emit(key, value) { onChange({ [key]: { newValue: value } }, "local"); },
     advance(minutes) { now += minutes * 60000; tick(); },
@@ -85,6 +92,21 @@ test("the reported weekly-only popup starts proportionally and switches to confi
     new Date(popup.now()).toISOString(), "session").state;
   popup.emit(keys.capacityState, capacity);
   assert.equal(popup.text(), "≈ 1 h 30 min left at this pace");
+});
+
+test("an older installed background offers an explicit reload instead of the weekly fallback", async () => {
+  const popup = await openPopup({ legacyBackground: true });
+  assert.equal(popup.text(), "Reload extension for estimate");
+  assert.equal(popup.elements.get("paceReloadNotice").hidden, false);
+  assert.equal(popup.reloads(), 0);
+  popup.elements.get("reloadExtensionButton").listeners.click();
+  assert.equal(popup.reloads(), 1);
+});
+
+test("the current background hides the reload prompt", async () => {
+  const popup = await openPopup();
+  assert.equal(popup.elements.get("paceReloadNotice").hidden, true);
+  assert.equal(popup.reloads(), 0);
 });
 
 test("a fallback still obeys the visible reset deadline and expires with stale data", async () => {
