@@ -4,6 +4,8 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Shorten remaining-time tooltips to one sentence specific to the displayed limit.
+
 - Preserve the last recent confirmed counter reading when upgrading from a version without pace history, and retain recent declining measurements across extension reloads, so the next decrease does not restart the estimate from a proportional duration.
 
 - Tailor every estimate tooltip to its own weekly or 5-hour limit. Detect an older background process that cannot record pace and offer a one-click extension reload instead of displaying a misleading proportional duration.

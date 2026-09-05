@@ -247,17 +247,16 @@
   function formatPaceTooltip(estimate, key) {
     const limit = key === "codexWeekly" ? "weekly" : "5-hour";
     if (estimate.status === "reload-required") {
-      return `Reload the extension to enable ${limit} pace tracking. Refresh is still using an older background version.`;
+      return `Reload to track ${limit} usage.`;
     }
     if (estimate.status === "nominal") {
-      const window = key === "codexWeekly" ? "1 week" : "5 hours";
-      return `Initial ${limit} estimate: remaining percentage × ${window}. No ${limit} consumption rate has been measured yet. Confirmed refreshes will replace this starting estimate.`;
+      return `Initial estimate from your remaining ${limit} capacity.`;
     }
-    if (estimate.status === "reset-bound") return `Capped at the time remaining until the ${limit} reset shown by Analytics.`;
-    if (estimate.status === "idle") return `No decrease in ${limit} capacity was detected between recent confirmed refreshes.`;
+    if (estimate.status === "reset-bound") return `Time until the ${limit} reset.`;
+    if (estimate.status === "idle") return `No recent ${limit} consumption.`;
     if (estimate.status === "exhausted") return `The ${limit} limit has been reached.`;
-    if (estimate.status !== "estimated") return `A recent ${limit} reading and a readable reset time are needed to show this estimate.`;
-    return `Based on ${limit} consumption measured between confirmed refreshes over the last 2 hours. A ${limit} reset carries the previous pace forward until a new rate is measured. Measured from the latest refresh.`;
+    if (estimate.status !== "estimated") return `Not enough recent ${limit} data.`;
+    return `Time left at your current ${limit} usage rate.`;
   }
 
   function extractFreshStateCounters(rawState, now = new Date().toISOString()) {
