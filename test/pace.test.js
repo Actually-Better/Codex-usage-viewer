@@ -52,6 +52,38 @@ test("cached data from a previous browser session uses the proportional estimate
   assert.equal(result.durationMs, 150 * minute);
 });
 
+test("a fresh weekly balance has a proportional estimate even without stored pace", () => {
+  const now = start + 8 * minute;
+  for (const pace of [null, {}, { codexWeekly: [] }]) {
+    const result = monitor.estimateDisplayedTimeRemaining(pace, "codexWeekly", 7, start, now);
+    assert.equal(result.status, "nominal");
+    assert.equal(monitor.formatPaceEstimate(result), "≈ 11 h 45 min left · initial estimate");
+  }
+});
+
+test("fresh displayed values use a proportional fallback until confirmed history catches up", () => {
+  let state = refresh(null, 0, { codex5h: 60 });
+  state = refresh(state, 15, { codex5h: 50 });
+  const result = monitor.estimateDisplayedTimeRemaining(state.pace, "codex5h", 40, start + 20 * minute, start + 20 * minute);
+  assert.equal(result.status, "nominal");
+  assert.equal(result.durationMs, 120 * minute);
+  state = refresh(state, 30, { codex5h: 40 });
+  const measured = monitor.estimateDisplayedTimeRemaining(state.pace, "codex5h", 40, start + 30 * minute, start + 30 * minute);
+  assert.equal(measured.status, "estimated");
+  assert.equal(measured.durationMs, 60 * minute);
+});
+
+test("display fallbacks reject stale, invalid and future observations", () => {
+  for (const observedAt of [NaN, start - 36 * minute, start + minute]) {
+    assert.equal(monitor.estimateDisplayedTimeRemaining(null, "codex5h", 50, observedAt, start).status, "unavailable");
+  }
+  for (const percent of [null, NaN, -1, 101]) {
+    assert.equal(monitor.estimateDisplayedTimeRemaining(null, "codex5h", percent, start, start).status, "unavailable");
+  }
+  assert.equal(monitor.estimateDisplayedTimeRemaining(null, "codexCredits", 50, start, start).status, "unavailable");
+  assert.equal(monitor.estimateDisplayedTimeRemaining(null, "codex5h", 0, start, start).status, "exhausted");
+});
+
 test("flat usage is idle and exhaustion needs no calculated rate", () => {
   let state = refresh(null, 0, { codex5h: 50 });
   state = refresh(state, 15, { codex5h: 50 });

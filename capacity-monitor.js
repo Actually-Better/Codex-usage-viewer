@@ -180,13 +180,28 @@
     const first = recent[0];
     if (recent.length < 2 || last.at - first.at < 60000) {
       if (first.msPerPercent) return { status: "estimated", durationMs: remainingPercent * first.msPerPercent };
-      const windowMs = key === "codex5h" ? 5 * 3600000 : 7 * 24 * 3600000;
-      return { status: "nominal", durationMs: remainingPercent / 100 * windowMs };
+      return proportionalEstimate(key, remainingPercent);
     }
     const consumed = first.remainingPercent - last.remainingPercent;
     if (consumed <= 0) return { status: "idle" };
     const durationMs = remainingPercent * (last.at - first.at) / consumed;
     return { status: "estimated", durationMs };
+  }
+
+  function proportionalEstimate(key, remainingPercent) {
+    if (remainingPercent === 0) return { status: "exhausted" };
+    const windowMs = key === "codex5h" ? 5 * 3600000 : 7 * 24 * 3600000;
+    return { status: "nominal", durationMs: remainingPercent / 100 * windowMs };
+  }
+
+  function estimateDisplayedTimeRemaining(rawPace, key, remainingPercent, observedAt, now = Date.now(), sameSession = true) {
+    if (!PACE_KEYS.includes(key) || normalizePercent(remainingPercent) === null
+      || !Number.isFinite(observedAt) || observedAt > now
+      || now - observedAt > COUNTER_STALE_AFTER_MS) return { status: "unavailable" };
+    const measured = estimateTimeRemaining(rawPace, key, remainingPercent, now, sameSession);
+    // A fresh visible balance can provide a proportional starting point even
+    // before confirmed history exists, or while it catches up with that balance.
+    return measured.status === "unavailable" ? proportionalEstimate(key, remainingPercent) : measured;
   }
 
   function limitEstimateToReset(estimate, resetAt, now = Date.now()) {
@@ -400,6 +415,7 @@
     detectTransition,
     evaluateSnapshot,
     estimateTimeRemaining,
+    estimateDisplayedTimeRemaining,
     formatPaceEstimate,
     limitEstimateToReset,
     extractAvailableCounters,

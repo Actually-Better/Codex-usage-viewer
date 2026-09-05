@@ -331,13 +331,14 @@
       estimate.className = "metric-estimate";
       const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
       const remaining = structured.remainingPercent;
-      let result = CodexCapacityMonitor.estimateTimeRemaining(
-        snapshot.loginStatus === "logged-in" ? latestPace : null, key, remaining, Date.now(),
+      const observedAt = Date.parse(snapshot.collectedAt || latestRefreshTimestamp);
+      let result = CodexCapacityMonitor.estimateDisplayedTimeRemaining(
+        latestPace, key, remaining, snapshot.loginStatus === "logged-in" ? observedAt : NaN, Date.now(),
         Boolean(currentPaceSessionId && latestCapacitySessionId === currentPaceSessionId)
       );
       if (structured.resetText) {
         const resetAt = ChatGPTUsageModel.parseResetAt(
-          structured.resetText, Date.parse(snapshot.collectedAt || latestRefreshTimestamp)
+          structured.resetText, observedAt
         );
         result = resetAt === null ? { status: "unavailable" }
           : CodexCapacityMonitor.limitEstimateToReset(result, resetAt);
@@ -346,7 +347,7 @@
       estimate.title = result.status === "reset-bound"
         ? "Capped at the time remaining until the reset shown by Analytics."
         : result.status === "nominal"
-        ? "Initial estimate: remaining percentage × the 5-hour or weekly window. The next refresh will adjust it using measured consumption."
+        ? "Initial estimate: remaining percentage × the 5-hour or weekly window. Confirmed refreshes will replace it with measured consumption."
         : "Based on consumption between confirmed refreshes over the last 2 hours. A reset during the session carries the previous pace forward until a new rate is measured. Measured from the latest refresh.";
       card.append(estimate);
     }

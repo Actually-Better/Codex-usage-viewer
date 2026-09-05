@@ -4,6 +4,8 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+- Show the proportional initial estimate for fresh visible usage when confirmed pace history is missing or differs from the displayed balance, then switch to the measured rate as soon as confirmed refreshes catch up.
+
 - Cap every numeric remaining-time estimate at the visible reset deadline, preserving English/Spanish reset dates and relative durations and updating the cap while the popup stays open.
 
 - After a reset within the current browser session, project the restored capacity using the previous consumption rate until the next measurement. Without a measured rate in the current session, show a clearly provisional estimate proportional to the remaining percentage of the 5-hour or weekly window.
