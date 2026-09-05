@@ -218,7 +218,12 @@ async function getPopupState() {
     await applyObservedCapacityVisual(nextState.snapshot);
   }
   refreshIfStale("popup-open", nextState).catch(() => {});
-  return { ok: true, state: nextState, paceSessionId: await getPaceSessionId() };
+  return {
+    ok: true,
+    state: nextState,
+    paceSessionId: await getPaceSessionId(),
+    paceTrackerVersion: CodexCapacityMonitor.PACE_TRACKER_VERSION
+  };
 }
 
 async function refreshForPopup() {

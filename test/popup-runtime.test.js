@@ -22,7 +22,7 @@ class Element {
   setAttribute() {}
 }
 
-async function openPopup({ legacyBackground = false } = {}) {
+async function openPopup({ legacyBackground = false, paceTrackerVersion = CodexCapacityMonitor.PACE_TRACKER_VERSION } = {}) {
   let now = Date.parse("2026-09-05T16:00:00Z");
   const snapshot = {
     loginStatus: "logged-in", hostname: "chatgpt.com", domUsageVisible: true,
@@ -52,7 +52,7 @@ async function openPopup({ legacyBackground = false } = {}) {
     setInterval(callback) { tick = callback; },
     chrome: {
       runtime: {
-        async sendMessage() { return legacyBackground ? { state } : { state, paceSessionId: "session" }; },
+        async sendMessage() { return legacyBackground ? { state } : { state, paceSessionId: "session", paceTrackerVersion }; },
         reload() { reloads += 1; }
       },
       storage: { local: { async get() { return {}; } }, onChanged: { addListener(fn) { onChange = fn; } } }
@@ -107,6 +107,12 @@ test("the current background hides the reload prompt", async () => {
   const popup = await openPopup();
   assert.equal(popup.elements.get("paceReloadNotice").hidden, true);
   assert.equal(popup.reloads(), 0);
+});
+
+test("an outdated pace tracker is detected even when the background already has a session ID", async () => {
+  const popup = await openPopup({ paceTrackerVersion: 1 });
+  assert.equal(popup.text(), "Reload extension for estimate");
+  assert.equal(popup.elements.get("paceReloadNotice").hidden, false);
 });
 
 test("a fallback still obeys the visible reset deadline and expires with stale data", async () => {

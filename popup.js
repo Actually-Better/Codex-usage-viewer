@@ -80,7 +80,8 @@
     latestCapacitySessionId = stored[key] && stored[key].paceSessionId;
     const response = await chrome.runtime.sendMessage({ type: "usage:getState" });
     currentPaceSessionId = response && response.paceSessionId;
-    requiresExtensionReload = Boolean(response && response.state && !currentPaceSessionId);
+    requiresExtensionReload = Boolean(response && response.state && (!currentPaceSessionId
+      || response.paceTrackerVersion !== CodexCapacityMonitor.PACE_TRACKER_VERSION));
     paceReloadNotice.hidden = !requiresExtensionReload;
     renderState(response && response.state);
   }

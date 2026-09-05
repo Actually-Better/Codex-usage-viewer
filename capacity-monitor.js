@@ -14,6 +14,7 @@
   const PACE_WINDOW_MS = 2 * 60 * 60 * 1000;
   const PACE_MAX_GAP_MS = 90 * 60 * 1000;
   const PACE_KEYS = ["codex5h", "codexWeekly"];
+  const PACE_TRACKER_VERSION = 2;
   const COUNTERS = Object.freeze([
     { key: "codexWeekly", label: "Weekly usage" },
     { key: "codex5h", label: "5-hour usage" },
@@ -86,6 +87,18 @@
     const settings = normalizeSettings(rawSettings);
     const previous = normalizeMonitorState(previousState);
     const available = extractAvailableCounters(snapshot);
+    const upgradingPace = previousState && previousState.pace === undefined
+      && previousState.paceSessionId === undefined;
+    if (upgradingPace) {
+      // Older versions kept one confirmed observation per counter. Preserve it
+      // as the first rate sample instead of discarding it during the upgrade.
+      for (const key of PACE_KEYS) {
+        const stored = previous.counters[key];
+        if (stored && isFreshObservation(stored, now)) {
+          previous.pace[key] = [{ at: Date.parse(stored.lastSeenAt), remainingPercent: stored.remainingPercent }];
+        }
+      }
+    }
     const counters = Object.fromEntries(
       Object.entries(previous.counters).filter(([, stored]) => isFreshObservation(stored, now))
     );
@@ -105,7 +118,7 @@
     const state = {
       version: 2,
       counters,
-      pace: updatePace(available, previous.pace, Date.parse(now), previous.paceSessionId === paceSessionId),
+      pace: updatePace(available, previous.pace, Date.parse(now), upgradingPace || previous.paceSessionId === paceSessionId),
       paceSessionId,
       availableKeys: available.map((counter) => counter.key),
       updatedAt: now
@@ -136,7 +149,8 @@
         continue;
       }
       const last = pace[key].at(-1);
-      const continuous = sameSession && last && now >= last.at && now - last.at <= PACE_MAX_GAP_MS;
+      const continuous = last && now >= last.at && now - last.at <= PACE_MAX_GAP_MS
+        && (sameSession || counter.remainingPercent <= last.remainingPercent);
       let samples = continuous ? pace[key].filter((sample) => sample.at >= now - PACE_WINDOW_MS) : [];
       let seed = {};
       if (last && counter.remainingPercent > last.remainingPercent) {
@@ -425,6 +439,7 @@
     COUNTERS,
     DEFAULT_SETTINGS,
     PREVENTIVE_THRESHOLD,
+    PACE_TRACKER_VERSION,
     buildNotification,
     classifyRemaining,
     classifyUsageLevel,

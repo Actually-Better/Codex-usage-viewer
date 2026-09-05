@@ -979,6 +979,31 @@ test("browser session storage selects inherited pace or a provisional window aft
   assert.equal(CodexCapacityMonitor.estimateTimeRemaining(newStored.pace, "codex5h", 100).status, "nominal");
 });
 
+test("the first refresh migrates a legacy baseline and a reload preserves the measured rate", async () => {
+  const previousTime = new Date(Date.now() - 6 * 60000).toISOString();
+  const legacy = {
+    version: 2, availableKeys: ["codexWeekly"], updatedAt: previousTime,
+    counters: { codexWeekly: { remainingPercent: 5, resetText: "Sep 11, 2026 7:32 AM", lastSeenAt: previousTime } }
+  };
+  const harness = createBackgroundHarness({ capacityState: legacy });
+  await new Promise((resolve) => setImmediate(resolve));
+  const process = 'processCapacitySnapshot({ usage: { codexWeekly: { structured: { remainingPercent: 4 } } } })';
+  await harness.run(process);
+  const stored = harness.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.equal(stored.pace.codexWeekly.length, 2);
+  const result = CodexCapacityMonitor.estimateTimeRemaining(stored.pace, "codexWeekly", 4);
+  assert.equal(result.status, "estimated");
+  assert.ok(Math.abs(result.durationMs - 24 * 60000) < 1000);
+
+  const reloaded = createBackgroundHarness({ capacityState: stored });
+  reloaded.sessionStorage[ChatGPTUsageConfig.storageKeys.paceSessionId] = "reloaded-session";
+  await new Promise((resolve) => setImmediate(resolve));
+  await reloaded.run(process);
+  const after = reloaded.storage[ChatGPTUsageConfig.storageKeys.capacityState];
+  assert.equal(after.paceSessionId, "reloaded-session");
+  assert.equal(CodexCapacityMonitor.estimateTimeRemaining(after.pace, "codexWeekly", 4).status, "estimated");
+});
+
 test("a transient optional counter stays in popup data but cannot alert", async () => {
   const baseline = CodexCapacityMonitor.evaluateSnapshot({
     usage: {

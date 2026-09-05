@@ -234,3 +234,36 @@ test("measured weekly consumption takes precedence over the 7-percent proportion
   assert.equal(result.durationMs, 7 / 8 * 105 * minute);
   assert.equal(monitor.formatPaceEstimate(result), "≈ 1 h 31 min left at this pace");
 });
+
+test("upgrading from legacy counters uses the previous confirmed balance to measure the first decrease", () => {
+  const previous = {
+    version: 2,
+    counters: { codexWeekly: {
+      remainingPercent: 5, lastSeenAt: new Date(start).toISOString(), resetText: "Sep 11, 2026 7:32 AM"
+    } },
+    availableKeys: ["codexWeekly"], updatedAt: new Date(start).toISOString()
+  };
+  const state = refresh(previous, 6, { codexWeekly: 4 }, "new-tracker");
+  const result = estimate(state, 6, "codexWeekly");
+  assert.equal(state.pace.codexWeekly.length, 2);
+  assert.equal(result.status, "estimated");
+  assert.equal(result.durationMs, 24 * minute);
+});
+
+test("legacy migration rejects stale observations and restarts on a recovered balance", () => {
+  const previous = { counters: { codexWeekly: { remainingPercent: 5, lastSeenAt: new Date(start).toISOString() } } };
+  const stale = refresh(previous, 36, { codexWeekly: 4 }, "new-tracker");
+  assert.equal(estimate(stale, 36, "codexWeekly").status, "nominal");
+  const reset = refresh(previous, 6, { codexWeekly: 100 }, "new-tracker");
+  assert.equal(estimate(reset, 6, "codexWeekly").status, "nominal");
+  assert.equal(reset.pace.codexWeekly.length, 1);
+});
+
+test("a reload preserves recent declining measurements instead of restarting the rate", () => {
+  let state = refresh(null, 0, { codexWeekly: 7 }, "old-session");
+  state = refresh(state, 20, { codexWeekly: 4 }, "new-session");
+  assert.equal(estimate(state, 20, "codexWeekly").status, "estimated");
+  assert.equal(estimate(state, 20, "codexWeekly").durationMs, 4 * 20 * minute / 3);
+  state = refresh(state, 30, { codexWeekly: 3 }, "new-session");
+  assert.equal(estimate(state, 30, "codexWeekly").durationMs, 22.5 * minute);
+});
