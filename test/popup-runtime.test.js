@@ -52,6 +52,7 @@ async function openPopup({ legacyBackground = false, paceTrackerVersion = CodexC
     setInterval(callback) { tick = callback; },
     chrome: {
       runtime: {
+        getManifest() { return JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8")); },
         async sendMessage() { return legacyBackground ? { state } : { state, paceSessionId: "session", paceTrackerVersion }; },
         reload() { reloads += 1; }
       },

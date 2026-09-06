@@ -1,6 +1,8 @@
 (function initPopup() {
   "use strict";
 
+  document.getElementById("extensionVersion").textContent = chrome.runtime.getManifest().version;
+
   const refreshButton = document.getElementById("refreshButton");
   const reloadExtensionButton = document.getElementById("reloadExtensionButton");
   const paceReloadNotice = document.getElementById("paceReloadNotice");

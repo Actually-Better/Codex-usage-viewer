@@ -558,9 +558,21 @@
       }
 
       .foot {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
         color: var(--muted);
         font-size: 12px;
         padding-top: 11px;
+      }
+
+      #extensionVersion {
+        flex-shrink: 0;
+      }
+
+      .foot-note {
+        text-align: right;
       }
 
       @media (max-width: 330px) {
@@ -676,7 +688,10 @@
         <div id="warningBox" class="note"></div>
       </details>
 
-      <div class="foot">Local only. Not affiliated with OpenAI.</div>
+      <div class="foot">
+        <span id="extensionVersion" aria-label="Extension version"></span>
+        <span class="foot-note">Local only. Not affiliated with OpenAI.</span>
+      </div>
     </div>
 
     <script src="usage-model.js"></script>

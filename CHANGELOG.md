@@ -4,6 +4,13 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-06
+
+- Show the installed extension version on the left of the popup footer, with the privacy note aligned right. Read the version directly from the extension manifest.
+- Establish ongoing version updates for each product fix or feature; see `AGENTS.md` for the policy.
+
+Version baseline: reviewed all 73 commits reachable from local refs through `0187f12`, including the initial release, refresh/parser and tab-lifecycle work, popup redesign, capacity alerts and startup refresh, refresh interval controls, credit/badge fixes, consumption estimates and follow-up corrections, and repository notification workflows. The only existing release tag is `v0.1.0`; the accumulated product features below warrant a minor increase to `0.2.0`. Merge commits and CI-only changes do not represent separate product releases. No intermediate historical versions or tags are invented.
+
 - Shorten remaining-time tooltips to one sentence specific to the displayed limit.
 
 - Preserve the last recent confirmed counter reading when upgrading from a version without pace history, and retain recent declining measurements across extension reloads, so the next decrease does not restart the estimate from a proportional duration.
