@@ -225,3 +225,60 @@ test("custom thresholds are normalized and applied", () => {
     ...CodexCapacityMonitor.DEFAULT_SETTINGS
   });
 });
+
+function observeChange(percent, resetText, previous = null, minute = 0, session = "session-a") {
+  return CodexCapacityMonitor.evaluateSnapshot(
+    { usage: { codexWeekly: metric(percent, resetText) } }, previous, {},
+    new Date(Date.UTC(2026, 8, 9, 10, minute)).toISOString(), session
+  );
+}
+
+test("partial increases notify once with the actual before and after percentages", () => {
+  const initial = observeChange(20, "Sep 10, 2026 14:00");
+  const next = observeChange(45, "Sep 10, 2026 14:00", initial.state, 1);
+  assert.deepEqual(next.events.map(e => e.type), ["capacity-increased"]);
+  assert.match(CodexCapacityMonitor.buildNotification(next.events[0]).message, /20% → 45%/);
+  assert.equal(observeChange(45, "Sep 10, 2026 14:00", next.state, 2).events.length, 0);
+  for (const type of ["capacity-increased", "reset-changed"]) {
+    assert.equal(CodexCapacityMonitor.shouldNotify({ type }, {}), true);
+    assert.equal(CodexCapacityMonitor.shouldNotify({ type }, { notifyOnReset: false }), false);
+    assert.equal(CodexCapacityMonitor.shouldNotify({ type }, { enableNotifications: false }), false);
+  }
+});
+
+test("reset date changes notify at the same balance and alongside a low crossing", () => {
+  const initial = observeChange(11, "Sep 10, 2026 14:00");
+  const next = observeChange(11, "Sep 10, 2026 14:01", initial.state, 1);
+  assert.deepEqual(next.events.map(e => e.type), ["reset-changed"]);
+  assert.match(CodexCapacityMonitor.buildNotification(next.events[0]).message, /14:01/);
+  assert.deepEqual(observeChange(10, "Sep 11, 2026 14:00", next.state, 2).events.map(e => e.type), ["low", "reset-changed"]);
+});
+
+test("combined changes emit one replenishment notification including full resets", () => {
+  const initial = observeChange(20, "Sep 10, 2026 14:00");
+  for (const [percent, type] of [[45, "capacity-increased"], [100, "reset"]]) {
+    const next = observeChange(percent, "Sep 11, 2026 14:00", initial.state, 1);
+    assert.deepEqual(next.events.map(e => e.type), [type]);
+  }
+});
+
+test("new sessions and stale observations do not trigger new change alerts", () => {
+  const initial = observeChange(20, "Sep 10, 2026 14:00");
+  assert.equal(observeChange(45, "Sep 11, 2026 14:00", initial.state, 1, "session-b").events.length, 0);
+  assert.equal(observeChange(45, "Sep 11, 2026 14:00", initial.state, 36).events.length, 0);
+  assert.equal(observeChange(45, "Sep 11, 2026 14:00").events.length, 0);
+});
+
+test("countdown progression, translated dates and missing reset data do not alert", () => {
+  for (const [before, after] of [
+    ["in 2 hours", "in 1 hour 59 minutes"],
+    ["Sep 10, 2026 14:00", "10 septiembre 2026 14:00"],
+    [null, "Sep 10, 2026 14:00"],
+    ["Sep 10, 2026 14:00", null]
+  ]) {
+    const initial = observeChange(20, before);
+    assert.equal(observeChange(20, after, initial.state, 1).events.length, 0);
+  }
+  const initial = observeChange(20, "in 2 hours");
+  assert.equal(observeChange(20, "in 3 hours", initial.state, 1).events[0].type, "reset-changed");
+});

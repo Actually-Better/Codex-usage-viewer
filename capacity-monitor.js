@@ -1,6 +1,9 @@
 (function initCapacityMonitor(globalScope) {
   "use strict";
 
+  const usageModel = globalScope.ChatGPTUsageModel
+    || (typeof require === "function" ? require("./usage-model.js").ChatGPTUsageModel : null);
+
   const DEFAULT_SETTINGS = Object.freeze({
     enableNotifications: true,
     notifyOnReset: true,
@@ -52,6 +55,7 @@
       counters[definition.key] = {
         remainingPercent,
         resetText: cleanResetText(stored.resetText),
+        sessionId: typeof stored.sessionId === "string" ? stored.sessionId : value.paceSessionId || null,
         lastSeenAt: typeof stored.lastSeenAt === "string" ? stored.lastSeenAt : null
       };
     }
@@ -107,11 +111,20 @@
       const stored = counters[counter.key];
       if (stored) {
         const eventType = detectTransition(stored.remainingPercent, counter.remainingPercent, settings);
+        const sameSession = paceSessionId !== null && stored.sessionId === paceSessionId;
+        const increased = sameSession && counter.remainingPercent > stored.remainingPercent;
+        const resetChanged = sameSession && hasResetChanged(stored, counter, now);
+        // A full reset already explains both changes; emit it only once.
         if (eventType) events.push({ ...counter, type: eventType });
+        if (eventType !== "reset" && (increased || resetChanged)) {
+          events.push({ ...counter, type: increased ? "capacity-increased" : "reset-changed",
+            previousRemainingPercent: stored.remainingPercent, resetChanged });
+        }
       }
       counters[counter.key] = {
         remainingPercent: counter.remainingPercent,
         resetText: counter.resetText,
+        sessionId: paceSessionId,
         lastSeenAt: now
       };
     }
@@ -124,6 +137,17 @@
       updatedAt: now
     };
     return { available, events, settings, state, visual: deriveVisualState(available, settings) };
+  }
+
+  function hasResetChanged(previous, current, now) {
+    if (!previous.resetText || !current.resetText || !usageModel) return false;
+    const before = usageModel.parseResetAt(previous.resetText, Date.parse(previous.lastSeenAt));
+    const after = usageModel.parseResetAt(current.resetText, Date.parse(now));
+    if (!Number.isFinite(before) || !Number.isFinite(after)) return false;
+    // Relative UI durations are rounded to minutes; absolute dates compare exactly.
+    const absolute = (text) => /\d{1,2}:\d{2}/.test(text);
+    const tolerance = absolute(previous.resetText) && absolute(current.resetText) ? 0 : 60000;
+    return Math.abs(after - before) > tolerance;
   }
 
   function normalizePace(raw) {
@@ -368,6 +392,16 @@
 
   function buildNotification(event) {
     const resetSuffix = event.resetText ? ` Reset: ${event.resetText}.` : "";
+    if (event.type === "capacity-increased") {
+      return {
+        title: `${event.label} capacity increased`,
+        message: `${event.previousRemainingPercent}% → ${event.remainingPercent}% remaining.${event.resetChanged ? " Reset date changed." : ""}${resetSuffix}`
+      };
+    }
+    if (event.type === "reset-changed") {
+      return { title: `${event.label} reset date changed`,
+        message: `${event.remainingPercent}% remaining.${resetSuffix}` };
+    }
     if (event.type === "reset") {
       return {
         title: `${event.label} reset`,
@@ -389,7 +423,7 @@
   function shouldNotify(event, rawSettings) {
     const settings = normalizeSettings(rawSettings);
     if (!settings.enableNotifications || !event) return false;
-    if (event.type === "reset") return settings.notifyOnReset;
+    if (["reset", "capacity-increased", "reset-changed"].includes(event.type)) return settings.notifyOnReset;
     return event.type === "low" || event.type === "critical" || event.type === "exhausted";
   }
 

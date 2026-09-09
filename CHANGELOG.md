@@ -4,6 +4,14 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.3.1 - 2026-09-09
+
+- Prefix the installed version displayed in the popup footer with `v`.
+
+## 0.3.0 - 2026-09-09
+
+- Notify when confirmed remaining capacity increases below 100% or the reset date changes within the same browser session. Respect reset notification preferences, avoid duplicate full-reset alerts, and ignore normal countdown progression.
+
 ## 0.2.0 - 2026-09-06
 
 - Show the installed extension version on the left of the popup footer, with the privacy note aligned right. Read the version directly from the extension manifest.

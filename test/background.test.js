@@ -1305,7 +1305,7 @@ test("disabling notifications clears every capacity alert type", async () => {
     enableNotifications: false
   })})`);
 
-  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
+  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 6);
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-exhausted"));
   assert.ok(harness.calls.clearedNotifications.includes("codex-capacity-codexWeekly-reset"));
 });
@@ -1317,7 +1317,7 @@ test("callback-only notification clearing completes every capacity ID", async ()
 
   await harness.run("clearCapacityMonitorState()");
 
-  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 4);
+  assert.equal(harness.calls.clearedNotifications.length, CodexCapacityMonitor.COUNTERS.length * 6);
 });
 
 test("sign-out during offscreen setup suppresses the pending alert sound", async () => {
@@ -2614,4 +2614,27 @@ test("refresh waits for late usage cards before saving the page snapshot", async
   assert.equal(result.state.snapshot.usage.bankedResets.structured.bankedResetCount, 2);
   assert.equal(result.state.snapshot.source, "requested-stable");
   assert.equal(harness.calls.sendMessage, 13);
+});
+
+
+test("partial replenishment and reset date changes create native notifications once", async () => {
+  const harness = createBackgroundHarness();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.calls.notifications.length = 0;
+  const process = (remainingPercent, resetText) => harness.run(`processCapacitySnapshot(${JSON.stringify({
+    usage: { codexWeekly: { structured: { remainingPercent, resetText } } }
+  })})`);
+  await process(20, "Sep 10, 2026 14:00");
+  await process(45, "Sep 10, 2026 14:00");
+  await process(45, "Sep 10, 2026 14:00");
+  await process(45, "Sep 11, 2026 14:00");
+  await process(45, "Sep 11, 2026 14:00");
+  assert.deepEqual(harness.calls.notifications.map(n => n.id), [
+    "codex-capacity-codexWeekly-capacity-increased",
+    "codex-capacity-codexWeekly-reset-changed"
+  ]);
+  await harness.run("clearAllCapacityNotifications()");
+  for (const notification of harness.calls.notifications) {
+    assert.ok(harness.calls.clearedNotifications.includes(notification.id));
+  }
 });

@@ -13,7 +13,7 @@ const ANALYTICS_STABLE_READS_REQUIRED = 5;
 const ANALYTICS_MIN_READS_AFTER_FIRST_DATA = 13;
 const REFRESH_TIMEOUT_MS = 45000;
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
-const CAPACITY_NOTIFICATION_TYPES = Object.freeze(["low", "critical", "exhausted", "reset"]);
+const CAPACITY_NOTIFICATION_TYPES = Object.freeze(["low", "critical", "exhausted", "reset", "capacity-increased", "reset-changed"]);
 const ACTION_ICON_PATHS = Object.freeze({
   16: "icons/icon-16.png",
   32: "icons/icon-32.png",
