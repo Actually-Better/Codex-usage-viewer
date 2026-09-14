@@ -277,6 +277,30 @@
         grid-column: 1 / -1;
       }
 
+      .secondary-limits:empty {
+        display: none;
+      }
+
+      .secondary-limits .metric-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .secondary-limits .metric-title,
+      .secondary-limits .metric-body {
+        min-height: 0;
+      }
+
+      .secondary-limits .metric-title,
+      .secondary-limits .metric-value {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
       .metric-card {
         min-width: 0;
       }
@@ -595,6 +619,7 @@
         <h2>Codex / Credits</h2>
         <div id="codexSection">
           <div id="primaryLimits" class="primary-limits"></div>
+          <div id="secondaryLimits" class="secondary-limits"></div>
           <div id="totalsSection" class="totals-list"></div>
         </div>
       </section>

@@ -4,6 +4,10 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.3.4 - 2026-09-14
+
+- Show an unavailable 5-hour limit as a compact row below the full-width weekly limit, without a disclosure. Keep available limits side by side.
+
 ## 0.3.3 - 2026-09-14
 
 - Remove the Other limits disclosure and always show the 5-hour and weekly limits directly, including unavailable readings.

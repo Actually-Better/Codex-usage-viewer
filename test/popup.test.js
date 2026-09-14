@@ -42,14 +42,16 @@ test("metrics are grouped into primary limits and totals", () => {
   assert.match(popupHtml, /id="totalsSection" class="totals-list"/);
 });
 
-test("both limits are rendered directly regardless of data availability", () => {
+test("an empty 5-hour limit is shown in a direct row below Weekly", () => {
   const renderer = popupSource.slice(
     popupSource.indexOf("function renderCodexCards"),
     popupSource.indexOf("function hasMetricData")
   );
 
-  assert.doesNotMatch(renderer, /codexSpark|otherLimits|if \(/);
-  assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codex5h"/);
+  assert.doesNotMatch(renderer, /codexSpark|otherLimits/);
+  assert.match(renderer, /if \(has5hData\)\s*{\s*appendMetric\(primaryLimits, snapshot, "codex5h"/);
+  assert.match(renderer, /if \(!has5hData\)\s*{\s*appendMetric\(secondaryLimits, snapshot, "codex5h"/);
+  assert.match(popupHtml, /id="primaryLimits"[^>]*><\/div>\s*<div id="secondaryLimits"/);
   assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codexWeekly"/);
 });
 
