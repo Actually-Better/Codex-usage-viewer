@@ -23,8 +23,6 @@
   const CODEX_FIELD_KEYS = [
     "codex5h",
     "codexWeekly",
-    "codexSpark5h",
-    "codexSparkWeekly",
     "codexCredits",
     "remainingCredits",
     "bankedResets"
@@ -185,12 +183,17 @@
 
   function hasVisibleUsage(snapshot) {
     if (!snapshot || !snapshot.usage) return false;
-    return Object.values(snapshot.usage).some((field) => field && field.value);
+    return Object.entries(snapshot.usage).some(([key, field]) => !isRetiredMetric(key) && field && field.value);
+  }
+
+  function isRetiredMetric(key) {
+    return key === "codexSpark5h" || key === "codexSparkWeekly";
   }
 
   function mergeUsageFields(baseUsage, incomingUsage) {
-    const merged = { ...(baseUsage || {}) };
+    const merged = Object.fromEntries(Object.entries(baseUsage || {}).filter(([key]) => !isRetiredMetric(key)));
     for (const [key, incomingField] of Object.entries(incomingUsage || {})) {
+      if (isRetiredMetric(key)) continue;
       const existingField = merged[key];
       if (!(key in merged)
         || usageFieldQuality(incomingField) >= usageFieldQuality(existingField)) {
@@ -278,8 +281,7 @@
     const structuredLooksContaminated = structured.resetText
       && (hasAnyConcept(resetContext, ["usage", "credits", "reset"]) || containsTerm(resetContext, "settings") || containsTerm(resetContext, "configuracion"));
     const shouldPreferParsed = parsed && (
-      String(fallbackTitle || "").toLowerCase().includes("codex-spark")
-      || structuredLooksContaminated
+      structuredLooksContaminated
       || typeof structured.remainingPercent !== "number"
     );
 
@@ -370,7 +372,7 @@
     const normalized = normalizeForMatch(match.window);
     if (!hasAnyConcept(normalized, ["usage", "remaining"]) && !containsTerm(normalized, "codex")) return null;
 
-    const hasSpark = containsTerm(normalized, "spark");
+    if (containsTerm(normalized, "spark")) return null;
     const fiveHourIndex = lastConceptIndex(normalized, "hours5");
     const weeklyIndex = lastConceptIndex(normalized, "weekly");
     const hasFiveHour = fiveHourIndex >= 0;
@@ -378,10 +380,8 @@
     const fiveHourIsClosest = hasFiveHour && (!hasWeekly || fiveHourIndex > weeklyIndex);
     const weeklyIsClosest = hasWeekly && (!hasFiveHour || weeklyIndex > fiveHourIndex);
 
-    if (hasSpark && fiveHourIsClosest) return "codexSpark5h";
-    if (hasSpark && weeklyIsClosest) return "codexSparkWeekly";
-    if (!hasSpark && fiveHourIsClosest) return "codex5h";
-    if (!hasSpark && weeklyIsClosest) return "codexWeekly";
+    if (fiveHourIsClosest) return "codex5h";
+    if (weeklyIsClosest) return "codexWeekly";
     return null;
   }
 
@@ -535,15 +535,12 @@
   function parseMetricText(value, fallbackTitle) {
     const title = normalizeForMatch(fallbackTitle || "");
     const fields = parseCodexUsageText(`${fallbackTitle || ""} ${value || ""}`);
-    const key = containsTerm(title, "spark") && hasConcept(title, "hours5")
-      ? "codexSpark5h"
-      : containsTerm(title, "spark") && hasConcept(title, "weekly")
-        ? "codexSparkWeekly"
-        : hasConcept(title, "weekly")
-          ? "codexWeekly"
-          : hasConcept(title, "credits")
-            ? "codexCredits"
-            : "codex5h";
+    if (containsTerm(title, "spark")) return null;
+    const key = hasConcept(title, "weekly")
+      ? "codexWeekly"
+      : hasConcept(title, "credits")
+        ? "codexCredits"
+        : "codex5h";
     const parsed = fields[key];
     return parsed && parsed.structured ? parsed.structured : null;
   }
@@ -563,8 +560,6 @@
     const labels = {
       codex5h: "5h limit",
       codexWeekly: "Weekly limit",
-      codexSpark5h: "Codex-Spark 5h",
-      codexSparkWeekly: "Codex-Spark weekly",
       codexCredits: "Credits",
       remainingCredits: "Credits",
       bankedResets: "Banked resets"

@@ -20,9 +20,7 @@
   const PACE_TRACKER_VERSION = 2;
   const COUNTERS = Object.freeze([
     { key: "codexWeekly", label: "Weekly usage" },
-    { key: "codex5h", label: "5-hour usage" },
-    { key: "codexSparkWeekly", label: "GPT-5.3-Codex-Spark weekly usage" },
-    { key: "codexSpark5h", label: "GPT-5.3-Codex-Spark 5-hour usage" }
+    { key: "codex5h", label: "5-hour usage" }
   ]);
   const SEVERITY = Object.freeze({ normal: 0, preventive: 1, warning: 2, critical: 3, exhausted: 4 });
   const BADGE_COLORS = Object.freeze({

@@ -282,3 +282,23 @@ test("countdown progression, translated dates and missing reset data do not aler
   const initial = observeChange(20, "in 2 hours");
   assert.equal(observeChange(20, "in 3 hours", initial.state, 1).events[0].type, "reset-changed");
 });
+
+test("retired Spark observations never affect capacity or alerts, including stored state", () => {
+  const stored = {
+    counters: {
+      codexSpark5h: { remainingPercent: 50 },
+      codexSparkWeekly: { remainingPercent: 50 }
+    },
+    availableKeys: ["codexSpark5h", "codexSparkWeekly"]
+  };
+  const result = CodexCapacityMonitor.evaluateSnapshot(
+    snapshot({ codexWeekly: 80, codexSpark5h: 0, codexSparkWeekly: 100 }),
+    stored,
+    {}
+  );
+  assert.deepEqual(result.available.map((counter) => counter.key), ["codexWeekly"]);
+  assert.equal(result.visual.badgeText, "80");
+  assert.deepEqual(result.events, []);
+  assert.equal(result.state.counters.codexSpark5h, undefined);
+  assert.equal(result.state.counters.codexSparkWeekly, undefined);
+});

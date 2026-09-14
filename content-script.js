@@ -372,9 +372,7 @@
       codexCredits: unavailableField(),
       remainingCredits: unavailableField(),
       codex5h: unavailableField(),
-      codexWeekly: unavailableField(),
-      codexSpark5h: unavailableField(),
-      codexSparkWeekly: unavailableField()
+      codexWeekly: unavailableField()
     };
 
     if (isCodexAnalyticsUsagePage()) {
@@ -410,7 +408,7 @@
   }
 
   function collectCodexAnalyticsDiagnostics(text, usage, analyticsDom) {
-    const keys = ["codex5h", "codexWeekly", "codexSpark5h", "codexSparkWeekly", "codexCredits", "bankedResets"];
+    const keys = ["codex5h", "codexWeekly", "codexCredits", "bankedResets"];
     const foundKeys = keys.filter((key) => usage[key] && usage[key].value);
     return {
       pageDetected: true,

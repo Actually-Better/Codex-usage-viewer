@@ -13,7 +13,7 @@
 - Detects whether ChatGPT appears to be signed in.
 - Detects the visible plan when ChatGPT exposes it in the UI.
 - Reads visible Codex Analytics usage cards from `chatgpt.com`.
-- Shows visible 5-hour, weekly, Codex-Spark, and credit values.
+- Shows visible 5-hour, weekly, and credit values.
 - Uses green, amber, and red usage indicators based on remaining percentage.
 - Refreshes through an automatically managed inactive Codex Analytics tab; users do not need to open Analytics manually.
 - Provides redacted diagnostics for bug reports.

@@ -28,8 +28,6 @@ test("metrics are grouped into primary limits, other limits, and totals", () => 
   const orderedKeys = [
     "codex5h",
     "codexWeekly",
-    "codexSpark5h",
-    "codexSparkWeekly",
     "codexCredits",
     "bankedResets"
   ];
@@ -52,6 +50,8 @@ test("an unavailable 5-hour limit moves below Other limits and leaves Weekly ful
     popupSource.indexOf("function renderMetricCard")
   );
 
+  assert.doesNotMatch(renderer, /codexSpark/);
+  assert.match(renderer, /document.getElementById\("otherLimits"\).hidden = has5hData/);
   assert.match(renderer, /const has5hData = hasMetricData\(snapshot, "codex5h"\)/);
   assert.match(renderer, /if \(has5hData\)\s*{\s*appendMetric\(primaryLimits, snapshot, "codex5h"/s);
   assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codexWeekly"/);

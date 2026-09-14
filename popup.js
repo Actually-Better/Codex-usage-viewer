@@ -307,6 +307,7 @@
     const has5hData = hasMetricData(snapshot, "codex5h");
     primaryLimits.textContent = "";
     otherLimits.textContent = "";
+    document.getElementById("otherLimits").hidden = has5hData;
     totals.textContent = "";
 
     if (has5hData) {
@@ -316,8 +317,6 @@
     if (!has5hData) {
       appendMetric(otherLimits, snapshot, "codex5h", "5h limit", "secondary-metric");
     }
-    appendMetric(otherLimits, snapshot, "codexSpark5h", "GPT-5.3-Codex-Spark 5h", "secondary-metric");
-    appendMetric(otherLimits, snapshot, "codexSparkWeekly", "GPT-5.3-Codex-Spark weekly", "secondary-metric");
     appendMetric(totals, snapshot, "codexCredits", "Credits", "total-metric");
     appendMetric(totals, snapshot, "bankedResets", "Full resets banked", "total-metric");
   }
@@ -450,8 +449,6 @@
     const labels = {
       codex5h: "5h",
       codexWeekly: "weekly",
-      codexSpark5h: "spark 5h",
-      codexSparkWeekly: "spark weekly",
       codexCredits: "credits",
       bankedResets: "full resets banked"
     };

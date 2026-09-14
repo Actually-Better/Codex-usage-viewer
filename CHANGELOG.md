@@ -4,6 +4,10 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.3.2 - 2026-09-14
+
+- Remove the retired GPT-5.3-Codex-Spark 5-hour and weekly limits from page analysis, popup metrics, and capacity alerts, including previously stored observations. Hide Other limits when empty.
+
 ## 0.3.1 - 2026-09-09
 
 - Prefix the installed version displayed in the popup footer with `v`.
