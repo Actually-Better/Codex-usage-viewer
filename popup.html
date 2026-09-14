@@ -363,7 +363,6 @@
         --metric-color: var(--red);
       }
 
-      .inline-disclosure,
       .settings,
       .diagnostics {
         border: 0;
@@ -371,7 +370,6 @@
         background: transparent;
       }
 
-      .inline-disclosure > summary,
       .settings > summary,
       .diagnostics > summary {
         color: var(--muted);
@@ -458,40 +456,6 @@
         margin: 0;
         color: var(--muted);
         font-size: 10px;
-      }
-
-      .other-limits-list {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 0;
-        padding-bottom: 7px;
-      }
-
-      .other-limits-list .metric-card {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: baseline;
-        gap: 10px;
-        padding: 8px 0;
-        border-top: 1px solid var(--border);
-      }
-
-      .other-limits-list .metric-title {
-        min-height: 0;
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .other-limits-list .metric-body {
-        min-height: 0;
-      }
-
-      .other-limits-list .metric-value {
-        font-size: 14px;
-      }
-
-      .other-limits-list .metric-meta {
-        display: none;
       }
 
       .totals-list {
@@ -631,10 +595,6 @@
         <h2>Codex / Credits</h2>
         <div id="codexSection">
           <div id="primaryLimits" class="primary-limits"></div>
-          <details id="otherLimits" class="inline-disclosure">
-            <summary>Other limits</summary>
-            <div id="otherLimitsSection" class="other-limits-list"></div>
-          </details>
           <div id="totalsSection" class="totals-list"></div>
         </div>
       </section>

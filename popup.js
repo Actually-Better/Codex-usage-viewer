@@ -302,21 +302,12 @@
 
   function renderCodexCards(snapshot) {
     const primaryLimits = document.getElementById("primaryLimits");
-    const otherLimits = document.getElementById("otherLimitsSection");
     const totals = document.getElementById("totalsSection");
-    const has5hData = hasMetricData(snapshot, "codex5h");
     primaryLimits.textContent = "";
-    otherLimits.textContent = "";
-    document.getElementById("otherLimits").hidden = has5hData;
     totals.textContent = "";
 
-    if (has5hData) {
-      appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
-    }
+    appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
     appendMetric(primaryLimits, snapshot, "codexWeekly", "Weekly limit", "primary-metric");
-    if (!has5hData) {
-      appendMetric(otherLimits, snapshot, "codex5h", "5h limit", "secondary-metric");
-    }
     appendMetric(totals, snapshot, "codexCredits", "Credits", "total-metric");
     appendMetric(totals, snapshot, "bankedResets", "Full resets banked", "total-metric");
   }

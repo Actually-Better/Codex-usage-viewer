@@ -11,8 +11,6 @@ const offscreenSource = readFileSync(join(__dirname, "..", "offscreen.js"), "utf
 test("the popup uses the compact layout without a mode toggle", () => {
   assert.doesNotMatch(popupHtml, /compactModeToggle|compact-toggle|toggle-track|body\.compact/);
   assert.doesNotMatch(popupSource, /storageKeys\.compactMode|applyCompactMode|saveCompactMode/);
-  assert.match(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*1fr/s);
-  assert.doesNotMatch(popupHtml, /\.other-limits-list\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(popupHtml, /#chatgptSection\s*{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(popupSource, /CodexCapacityMonitor\.classifyUsageLevel\(remainingPercent\)/);
   assert.match(popupSource, /classList\.add\("percentage-metric", `usage-\$\{usageLevel\}`\)/);
@@ -24,7 +22,7 @@ test("account metadata has no redundant ChatGPT section heading", () => {
   assert.match(popupHtml, /<section class="account-section">\s*<dl id="chatgptSection"><\/dl>/s);
 });
 
-test("metrics are grouped into primary limits, other limits, and totals", () => {
+test("metrics are grouped into primary limits and totals", () => {
   const orderedKeys = [
     "codex5h",
     "codexWeekly",
@@ -40,25 +38,19 @@ test("metrics are grouped into primary limits, other limits, and totals", () => 
   }
 
   assert.match(popupHtml, /id="primaryLimits" class="primary-limits"/);
-  assert.match(popupHtml, /<details id="otherLimits" class="inline-disclosure">\s*<summary>Other limits<\/summary>/s);
+  assert.doesNotMatch(popupHtml, /otherLimits|Other limits/);
   assert.match(popupHtml, /id="totalsSection" class="totals-list"/);
 });
 
-test("an unavailable 5-hour limit moves below Other limits and leaves Weekly full width", () => {
+test("both limits are rendered directly regardless of data availability", () => {
   const renderer = popupSource.slice(
     popupSource.indexOf("function renderCodexCards"),
-    popupSource.indexOf("function renderMetricCard")
+    popupSource.indexOf("function hasMetricData")
   );
 
-  assert.doesNotMatch(renderer, /codexSpark/);
-  assert.match(renderer, /document.getElementById\("otherLimits"\).hidden = has5hData/);
-  assert.match(renderer, /const has5hData = hasMetricData\(snapshot, "codex5h"\)/);
-  assert.match(renderer, /if \(has5hData\)\s*{\s*appendMetric\(primaryLimits, snapshot, "codex5h"/s);
+  assert.doesNotMatch(renderer, /codexSpark|otherLimits|if \(/);
+  assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codex5h"/);
   assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codexWeekly"/);
-  assert.match(renderer, /if \(!has5hData\)\s*{\s*appendMetric\(otherLimits, snapshot, "codex5h"/s);
-  assert.match(renderer, /field\.value !== undefined && field\.value !== null/);
-  assert.match(renderer, /Number\.isFinite\(field\.structured\.remainingPercent\)/);
-  assert.match(popupHtml, /\.primary-limits > \.metric-card:only-child\s*{[^}]*grid-column:\s*1 \/ -1/s);
 });
 
 test("refresh age sits immediately before Refresh in the action cluster", () => {

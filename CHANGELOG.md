@@ -4,6 +4,10 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.3.3 - 2026-09-14
+
+- Remove the Other limits disclosure and always show the 5-hour and weekly limits directly, including unavailable readings.
+
 ## 0.3.2 - 2026-09-14
 
 - Remove the retired GPT-5.3-Codex-Spark 5-hour and weekly limits from page analysis, popup metrics, and capacity alerts, including previously stored observations. Hide Other limits when empty.
