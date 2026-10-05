@@ -1,7 +1,7 @@
 (function initContentScript() {
   "use strict";
 
-  const EXTRACTOR_VERSION = "codex-analytics-v7";
+  const EXTRACTOR_VERSION = "codex-usage-v8";
   const SEND_COOLDOWN_MS = 1500;
   let lastSendAt = 0;
   let snapshotTimer = null;
@@ -480,13 +480,7 @@
   }
 
   function isCodexAnalyticsUsagePage() {
-    return location.hostname === "chatgpt.com"
-      && isCodexAnalyticsPath(location.pathname);
-  }
-
-  function isCodexAnalyticsPath(pathname) {
-    const path = String(pathname || "").toLowerCase();
-    return path.includes("/codex/") && path.includes("/settings/analytics");
+    return ChatGPTUsageModel.isUsagePageUrl(location.href);
   }
 
   function getElementText(element) {

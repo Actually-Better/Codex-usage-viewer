@@ -76,6 +76,19 @@ async function openPopup({ legacyBackground = false, paceTrackerVersion = CodexC
   };
 }
 
+test("the popup never shows a five-hour limit, including cached zero or available values", async () => {
+  const popup = await openPopup();
+  for (const field of [undefined, { value: null }, { value: "5h limit: 0% remaining", structured: { remainingPercent: 0 } }, { value: "5h limit: 80% remaining", structured: { remainingPercent: 80 } }]) {
+    popup.snapshot.usage.codex5h = field;
+    popup.emit(ChatGPTUsageConfig.storageKeys.state, popup.state);
+    const limits = popup.elements.get("primaryLimits");
+    assert.equal(limits.childElementCount, 1);
+    assert.match(limits.textContent, /Weekly limit/);
+    assert.doesNotMatch(limits.textContent, /5h|5.hour/);
+    assert.equal(popup.elements.has("secondaryLimits"), false);
+  }
+});
+
 test("the reported weekly-only popup starts proportionally and switches to confirmed pace", async () => {
   const popup = await openPopup();
   const keys = ChatGPTUsageConfig.storageKeys;

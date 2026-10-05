@@ -19,10 +19,10 @@ Recommended screenshots:
 - Detects whether ChatGPT appears to be signed in.
 - Detects the visible plan when the UI exposes it.
 - Reads visible Codex usage cards when available.
-- Shows 5-hour and weekly usage percentages when they are visible in the ChatGPT/Codex UI.
+- Shows the weekly usage percentage when it is visible in the ChatGPT UI; the popup omits the 5-hour limit even when older cached data contains it.
 - Shows remaining credits when visible.
 - Shows banked full-reset count and expiration when the Codex UI exposes `Banked resets`, `Full resets`, or `Restablecimiento completo`.
-- Offers a persistent compact mode that pairs login/plan, 5-hour/weekly and credits/full resets into two-column rows.
+- Uses a compact layout with a full-width weekly limit and paired login/plan and credits/full-reset rows.
 - Highlights usage bars:
   - Green: more than 50% remaining.
   - Amber: 15% to 50% remaining.
@@ -47,7 +47,7 @@ Recommended screenshots:
 
 ## Limitations
 
-This extension reads the rendered Codex Analytics UI from `chatgpt.com`.
+This extension reads the rendered [ChatGPT Usage overview](https://chatgpt.com/settings/usage?tab=overview). Its plan limits are shared across Codex, Work, Workspace Agents, and ChatGPT for Excel. Legacy Codex Analytics and Usage routes remain supported.
 
 Some values may be unavailable depending on:
 
@@ -86,6 +86,8 @@ The extension may need parser updates when ChatGPT changes page structure, wordi
 
 ## How extraction works
 
+Refreshes open `https://chatgpt.com/settings/usage?tab=overview`. The reader supports reset countdowns before the balance (such as `Resets in 4d 11h`), credit balances such as `1,925 credits remaining`, and the `Available 0` tab under Usage limit resets. Reset history is not counted as available inventory.
+
 The extension reads rendered UI text and accessibility attributes only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
 
 For normal manual and scheduled refreshes, the extension creates a newly loaded inactive Analytics tab, waits for its UI to render completely, and closes only the tab it created. It does this even when you are currently viewing Analytics because a long-lived page can keep displaying the values fetched when it opened. The only reusable reader is an extension-owned tab deliberately retained when manual sign-in is required. Your page remains active and is never reloaded by the refresh; **Visit Analytics** is the separate action that deliberately opens or focuses Analytics. This is more reliable than embedding Analytics in a hidden frame and does not require you to open or keep Analytics visible.
@@ -112,7 +114,7 @@ When a value cannot be found from visible text, the extension leaves that metric
 2. Open `chrome://extensions` or `edge://extensions`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the project folder.
+5. Select the project root containing `manifest.json` (this checkout: `/home/ramirogh/projects/codex-usage-viewer`; from Windows with WSL Ubuntu: `\\wsl.localhost\Ubuntu\home\ramirogh\projects\codex-usage-viewer`). No build is needed; `codex-usage-web` is the companion website, not the extension.
 6. Open ChatGPT and sign in.
 7. Click the extension icon.
 
@@ -124,9 +126,9 @@ When a value cannot be found from visible text, the extension leaves that metric
 - Click **Visit Analytics** only when you want to inspect the source page yourself; it opens or reuses Analytics and deliberately gives that tab and window focus. It is optional for refresh.
 - A manual or scheduled refresh uses a newly loaded temporary Analytics tab in the background, including when Analytics is already open or active, so it never trusts potentially stale values from a long-lived user page. The temporary tab is closed after reading without changing focus unless you activate it at any point; adopted tabs remain preserved even if you switch away again before reading finishes. If sign-in is required during a manual refresh, the extension-owned tab remains open in the background so you can select it and sign in through ChatGPT; selecting it transfers ownership to you immediately, including between refreshes. Repeated refreshes may reuse that one extension-owned sign-in tab and discard any newly created duplicate; automatic inactive redirects remain extension-owned and are returned to Analytics for the next manual read, while a tab you activate is preserved as user-owned. Ownership is session-scoped so a numeric tab ID is never trusted after a browser restart.
 - The 15-minute periodic check uses the same background-tab recovery path. If its scheduled tab requires sign-in, it is closed and the popup asks you to run a manual refresh. The extension also repairs the periodic alarm whenever its background worker starts.
-- The popup keeps a compact paired layout: login with plan, the 5-hour limit with the weekly limit, and credits with banked full resets. Percentage metrics use small circular gauges so they remain legible in two columns.
-- The 5-hour and weekly banners estimate time until exhaustion from the percentage consumed between confirmed refreshes in the last 2 hours. Each limit has its own local history (at most 121 readings). The estimate needs two readings at least a minute apart and is measured from the latest refresh; the visible reset time remains separate. When capacity increases within the current browser session, including a reset to 100%, the restored balance is extrapolated using the previous measured rate. The next reading at least a minute later replaces that projection with the new measured pace. Without a measured rate in the current session, including a higher balance from a previous browser session or after a gap over 90 minutes, the initial estimate is the remaining percentage multiplied by the 5-hour or weekly window. For example, 50% of the 5-hour window shows **2 h 30 min** and 50% of the weekly window shows **3 d 12 h**. This is labeled as an initial estimate until the next useful reading establishes the actual pace. Browser sessions are tracked in session storage so worker suspension does not start a new session. Unchanged readings show **No recent consumption**. Missing counters and sign-out clear the rate history. Fresh signed-in visible usage shows a proportional estimate even if confirmed history is missing or has not caught up with the displayed percentage. Estimates become unavailable when the displayed observation is invalid or over 35 minutes old.
-- Every numeric estimate is capped by the time until the visible reset: 50% of the 5-hour window with a reset in 1 hour shows **1 h**, even if the provisional or measured duration is longer. Clock times and relative durations are anchored to the collection timestamp, and the cap updates while the popup is open. English and Spanish dates, 12/24-hour times, ISO timestamps, and explicit durations are supported. A reset that is already due asks for a refresh; an unreadable reset time hides the estimate instead of guessing a deadline.
+- The popup pairs login with plan and credits with banked full resets, with a full-width weekly limit between them. The weekly percentage uses a small circular gauge. No 5-hour card or unavailable placeholder is shown.
+- The weekly banner estimates time until exhaustion from the percentage consumed between confirmed refreshes in the last 2 hours. Each limit has its own local history (at most 121 readings). The estimate needs two readings at least a minute apart and is measured from the latest refresh; the visible reset time remains separate. When capacity increases within the current browser session, including a reset to 100%, the restored balance is extrapolated using the previous measured rate. The next reading at least a minute later replaces that projection with the new measured pace. Without a measured rate in the current session, including a higher balance from a previous browser session or after a gap over 90 minutes, the initial estimate is the remaining percentage multiplied by the weekly window. For example, 50% of the weekly window shows **3 d 12 h**. This is labeled as an initial estimate until the next useful reading establishes the actual pace. Browser sessions are tracked in session storage so worker suspension does not start a new session. Unchanged readings show **No recent consumption**. Missing counters and sign-out clear the rate history. Fresh signed-in visible usage shows a proportional estimate even if confirmed history is missing or has not caught up with the displayed percentage. Estimates become unavailable when the displayed observation is invalid or over 35 minutes old.
+- Every numeric estimate is capped by the time until the visible reset: 50% of the weekly window with a reset in 1 hour shows **1 h**, even if the provisional or measured duration is longer. Clock times and relative durations are anchored to the collection timestamp, and the cap updates while the popup is open. English and Spanish dates, 12/24-hour times, ISO timestamps, and explicit durations are supported. A reset that is already due asks for a refresh; an unreadable reset time hides the estimate instead of guessing a deadline.
 - Open **Settings** to enable or disable notifications, reset notifications, the permanent toolbar percentage, low/critical thresholds, and sounds. Defaults are notifications on, reset notifications on, toolbar percentage on, low at 10%, critical at 5%, and sounds off.
 - With the permanent toolbar percentage disabled, normal and preventive states keep the badge empty. Warning, critical, and exhausted states may still show the percentage while the alert condition remains active.
 - The toolbar icon renders a larger compact number for the lowest percentage among limits present in the latest valid snapshot, while the tooltip keeps the explicit `% remaining` wording. Browsers without worker canvas support fall back to the native badge. Missing, null, or invalid values are excluded completely.
@@ -225,3 +227,7 @@ MIT. See `LICENSE`.
 This project is not affiliated with OpenAI.
 
 ChatGPT and Codex are trademarks or products of their respective owners. This extension only reads information visible in the web interface through the user's existing browser session.
+
+## Experimental App Server source
+
+An opt-in command-line probe is available with `npm run probe:app-server`. It reads through the existing Codex ChatGPT login and requires Node.js 18+ and Codex CLI on PATH. The popup continues to use the ChatGPT Usage overview; Native Messaging integration remains pending. See [the implementation status and identity limitations](docs/app-server-implementation.md) before running or sharing its output.
