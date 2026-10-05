@@ -39,6 +39,50 @@ function readFixture(name) {
   return readFileSync(join(__dirname, "fixtures", name), "utf8");
 }
 
+test("the shared Usage overview matches the reported October UI", () => {
+  const usage = ChatGPTUsageModel.parseCodexUsageText(readFixture("settings-usage-overview-en.txt"));
+  assert.equal(usage.codex5h.value, null);
+  assertPercentMetric(usage.codexWeekly, 0);
+  assert.equal(usage.codexWeekly.structured.resetText, "in 4d 11h");
+  assert.equal(usage.codexCredits.structured.remainingCredits, 1925);
+  assert.equal(usage.remainingCredits.structured.remainingCredits, 1925);
+  assert.equal(usage.bankedResets.structured.bankedResetCount, 0);
+  assert.equal(usage.bankedResets.structured.expiresText, null);
+});
+
+test("resets before the balance stay attached to their own limit", () => {
+  const usage = ChatGPTUsageModel.parseCodexUsageText("5-hour limit\nResets in 2h 15m\n80% left\nWeekly limit\nResets in 4d 11h\n20% left");
+  assert.equal(usage.codex5h.structured.resetText, "in 2h 15m");
+  assert.equal(usage.codexWeekly.structured.resetText, "in 4d 11h");
+  const missing = ChatGPTUsageModel.parseCodexUsageText("5-hour limit\n80% left\nWeekly limit\nResets in 4d 11h\n20% left");
+  assert.equal(missing.codex5h.structured.resetText, null);
+});
+
+test("leading credit balances accept English and Spanish thousands separators", () => {
+  for (const text of ["1,925 credits remaining", "1.925 créditos restantes", "1 925 créditos disponibles", "0 credits remaining"]) {
+    const usage = ChatGPTUsageModel.parseCodexUsageText(text);
+    assert.equal(usage.codexCredits.structured.remainingCredits, text.startsWith("0") ? 0 : 1925);
+  }
+});
+
+test("available reset tabs are scoped to reset inventory, never history or unrelated availability", () => {
+  for (const text of ["Usage limit resets\nAvailable\n2\nHistory", "Restablecimientos de límites de uso\nDisponibles 2\nHistorial"]) {
+    assert.equal(ChatGPTUsageModel.parseCodexUsageText(text).bankedResets.structured.bankedResetCount, 2);
+  }
+  for (const text of ["Available 30", "Usage limit resets\nHistory\nPast 30 days\nReset received\nSep 29\nAvailable 4"]) {
+    assert.equal(ChatGPTUsageModel.parseCodexUsageText(text).bankedResets.value, null);
+  }
+});
+
+test("usage routes accept the new settings page and old Codex URLs only", () => {
+  for (const path of ["/settings/usage?tab=overview", "/settings/usage/", "/codex/settings/usage", "/codex/cloud/settings/usage", "/codex/cloud/settings/analytics#usage"]) {
+    assert.equal(ChatGPTUsageModel.isUsagePageUrl(`https://chatgpt.com${path}`), true);
+  }
+  for (const url of ["https://chatgpt.com/c/chat", "https://chatgpt.com/settings/profile", "https://chatgpt.com/settings/usage-fake", "https://example.com/settings/usage", "http://chatgpt.com/settings/usage", "invalid"]) {
+    assert.equal(ChatGPTUsageModel.isUsagePageUrl(url), false);
+  }
+});
+
 const CASES = [
   {
     name: "Spanish standard wording",

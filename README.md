@@ -47,7 +47,7 @@ Recommended screenshots:
 
 ## Limitations
 
-This extension reads the rendered Codex Analytics UI from `chatgpt.com`.
+This extension reads the rendered [ChatGPT Usage overview](https://chatgpt.com/settings/usage?tab=overview). Its plan limits are shared across Codex, Work, Workspace Agents, and ChatGPT for Excel. Legacy Codex Analytics and Usage routes remain supported.
 
 Some values may be unavailable depending on:
 
@@ -86,6 +86,8 @@ The extension may need parser updates when ChatGPT changes page structure, wordi
 
 ## How extraction works
 
+Refreshes open `https://chatgpt.com/settings/usage?tab=overview`. The reader supports reset countdowns before the balance (such as `Resets in 4d 11h`), credit balances such as `1,925 credits remaining`, and the `Available 0` tab under Usage limit resets. Reset history is not counted as available inventory.
+
 The extension reads rendered UI text and accessibility attributes only. It does not call private OpenAI APIs, hidden account endpoints, external services, or telemetry collectors.
 
 For normal manual and scheduled refreshes, the extension creates a newly loaded inactive Analytics tab, waits for its UI to render completely, and closes only the tab it created. It does this even when you are currently viewing Analytics because a long-lived page can keep displaying the values fetched when it opened. The only reusable reader is an extension-owned tab deliberately retained when manual sign-in is required. Your page remains active and is never reloaded by the refresh; **Visit Analytics** is the separate action that deliberately opens or focuses Analytics. This is more reliable than embedding Analytics in a hidden frame and does not require you to open or keep Analytics visible.
@@ -112,7 +114,7 @@ When a value cannot be found from visible text, the extension leaves that metric
 2. Open `chrome://extensions` or `edge://extensions`.
 3. Enable **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the project folder.
+5. Select the project root containing `manifest.json` (this checkout: `/home/ramirogh/projects/codex-usage-viewer`; from Windows with WSL Ubuntu: `\\wsl.localhost\Ubuntu\home\ramirogh\projects\codex-usage-viewer`). No build is needed; `codex-usage-web` is the companion website, not the extension.
 6. Open ChatGPT and sign in.
 7. Click the extension icon.
 
@@ -225,3 +227,7 @@ MIT. See `LICENSE`.
 This project is not affiliated with OpenAI.
 
 ChatGPT and Codex are trademarks or products of their respective owners. This extension only reads information visible in the web interface through the user's existing browser session.
+
+## Experimental App Server source
+
+An opt-in command-line probe is available with `npm run probe:app-server`. It reads through the existing Codex ChatGPT login and requires Node.js 18+ and Codex CLI on PATH. The popup continues to use the ChatGPT Usage overview; Native Messaging integration remains pending. See [the implementation status and identity limitations](docs/app-server-implementation.md) before running or sharing its output.

@@ -1,0 +1,36 @@
+Settings
+Usage
+Overview
+Analytics
+Plan limits
+Shared across Codex, Work, Workspace Agents, and ChatGPT for Excel. Chat conversations are not included.
+Weekly limit
+Resets in 4d 11h
+0% left
+Credits
+Buy credits or turn on automatic reload to continue using Work and Codex when you reach usage limits. Learn more
+1,925 credits remaining
+Current balance
+Add more
+Automatic reload
+App limits
+Set limits for each app's use of your ChatGPT plan and credits.
+Save
+Vercel
+10%
+Allow other apps to use credits after reaching your usage limit
+Applies to apps you've allowed to use your ChatGPT plan.
+Usage limit resets
+Use a reset to restore your 5-hour limit, weekly limit, or both
+Available 0
+History
+Past 30 days
+Reset used
+Sep 30
+5:00 PM GMT+2
+Reset received
+Sep 29
+8:50 PM GMT+2
+Reset used
+Sep 22
+11:51 PM GMT+2

@@ -6,6 +6,12 @@ const { CodexCapacityMonitor: monitor } = require("../capacity-monitor.js");
 const hour = 3600000;
 const observed = new Date(2026, 8, 5, 12, 0).getTime();
 
+test("compact overview reset durations include days and hours", () => {
+  for (const text of ["in 4d 11h", "4d11h", "en 4d 11h"]) {
+    assert.equal(model.parseResetAt(text, observed), observed + 107 * hour);
+  }
+});
+
 test("relative reset durations are anchored to the observation, not popup opening", () => {
   for (const text of ["in 1 hr", "1 h", "en 1 hora", "60 minutes"]) {
     assert.equal(model.parseResetAt(text, observed), observed + hour, text);

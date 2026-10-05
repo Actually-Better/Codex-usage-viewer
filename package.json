@@ -1,6 +1,6 @@
 {
   "name": "codex-usage-viewer",
-  "version": "0.3.4",
+  "version": "0.4.1",
   "description": "Local-only Chrome and Edge extension that shows visible ChatGPT/Codex usage information.",
   "license": "MIT",
   "private": true,
@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check background.js && node --check capacity-monitor.js && node --check content-script.js && node --check offscreen.js && node --check popup.js && node --check usage-model.js"
+    "check": "node --check background.js && node --check capacity-monitor.js && node --check content-script.js && node --check offscreen.js && node --check popup.js && node --check usage-model.js && node --check usage-source.js && node --check native/app-server-client.cjs && node --check scripts/probe-app-server.cjs",
+    "probe:app-server": "node scripts/probe-app-server.cjs"
   }
 }

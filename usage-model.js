@@ -2,6 +2,7 @@
   "use strict";
 
   const CONFIG = {
+    usagePageUrl: "https://chatgpt.com/settings/usage?tab=overview",
     storageKeys: {
       state: "chatgptUsageMonitor.state",
       counters: "chatgptUsageMonitor.counters",
@@ -172,6 +173,17 @@
     const normalized = `${pageKind || ""} ${label || ""}`.toLowerCase();
     if (normalized.includes("codex")) return "codex";
     return "message";
+  }
+
+  function isUsagePageUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:"
+        && ["chatgpt.com", "chat.openai.com"].includes(url.hostname)
+        && /^\/(?:settings\/usage|codex\/(?:cloud\/)?settings\/(?:analytics|usage))\/?$/i.test(url.pathname);
+    } catch {
+      return false;
+    }
   }
 
   function parseTimestamp(value) {
@@ -346,7 +358,21 @@
       const end = Math.min(lines.length, index + 4);
       const window = lines.slice(start, index + 1).join("\n");
       const confidenceWindow = lines.slice(start, end).join("\n");
-      const resetText = extractResetText(lines.slice(index, end).join(" "));
+      // A reset can precede the balance in the same card. Stop at adjacent
+      // metrics so a missing reset never borrows the next card's deadline.
+      let resetStart = index;
+      while (resetStart > start && !extractPercent(lines[resetStart - 1])) {
+        resetStart -= 1;
+        if (matchesUsageTerms(lines[resetStart], ["hours5", "weekly"])) break;
+      }
+      let resetEnd = index + 1;
+      while (resetEnd < end
+        && !extractPercent(lines[resetEnd])
+        && (matchesUsageTerms(lines[resetEnd], ["reset"])
+          || !matchesUsageTerms(lines[resetEnd], ["hours5", "weekly", "credits", "bankedResets"]))) {
+        resetEnd += 1;
+      }
+      const resetText = extractResetText(lines.slice(resetStart, resetEnd).join(" "));
       matches.push({
         percent,
         line: lines[index],
@@ -401,6 +427,13 @@
   }
 
   function extractCredits(text) {
+    if (!text.includes("\n")) {
+      const value = extractInlineCreditValue(text);
+      if (value !== null) return {
+        value,
+        confidence: matchesUsageTerms(text, ["remaining"]) ? "high" : "low"
+      };
+    }
     const lines = text.includes("\n")
       ? text.split("\n").map((line) => line.trim()).filter(Boolean)
       : text.split(/(?=\b(?:credits?|credit balance|cr[eé]ditos?|saldo)\b)|(?<=\d)\s+/i).map((line) => line.trim()).filter(Boolean);
@@ -425,6 +458,8 @@
 
   function extractInlineCreditValue(line) {
     const normalized = normalizeForMatch(line);
+    const leadingBalance = normalized.match(/^(\d{1,3}(?:[,. ]\d{3})+|\d{1,9})\s+(?:credits?|creditos?)\s+(?:remaining|left|available|restantes?|disponibles?)\b/);
+    if (leadingBalance) return Number(leadingBalance[1].replace(/[,. ]/g, ""));
     const patterns = [
       /\b(?:credits?|creditos?)\s+(?:remaining|left|available|restantes?|disponibles?)\s*[:\-]?\s*(\d{1,9})\b/,
       /\b(?:remaining|left|available|restantes?|disponibles?)\s+(?:credits?|creditos?)\s*[:\-]?\s*(\d{1,9})\b/,
@@ -450,6 +485,27 @@
   function extractBankedResets(text) {
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
     const visibleCardCount = countBankedResetCards(text);
+
+    const sectionIndex = lines.findIndex((line) => /^(?:usage limit resets|restablecimientos de limites de uso)$/i.test(normalizeForMatch(line)));
+    if (sectionIndex >= 0) {
+      const section = lines.slice(sectionIndex + 1);
+      for (let index = 0; index < section.length; index += 1) {
+        const line = normalizeForMatch(section[index]);
+        if (/^(?:history|historial)\b/.test(line)) break;
+        const available = line.match(/^(?:available|disponibles?)\s*(\d{1,3})?(?:\s+(?:history|historial))?$/);
+        if (!available) continue;
+        const countText = available[1] ?? (/^\d{1,3}$/.test(section[index + 1] || "") ? section[index + 1] : null);
+        if (countText === null) continue;
+        return {
+          label: "Banked resets",
+          count: Number(countText),
+          countSource: "explicit-number",
+          expiresText: null,
+          confidence: "high",
+          expiryConfidence: null
+        };
+      }
+    }
 
     for (let index = 0; index < lines.length; index += 1) {
       const currentNormalized = normalizeForMatch(lines[index]);
@@ -570,13 +626,14 @@
   function cleanResetText(value) {
     if (!value) return null;
     const text = String(value)
+      .replace(/(\d)([wdhms])(?=\d)/gi, "$1$2 ")
       .replace(/\s+/g, " ")
       .replace(/[;|].*$/, "")
       .trim();
     const patterns = [
       /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)/i,
       /^((?:today|tomorrow|hoy|ma[nñ]ana)[, ]+(?:(?:at|a las)\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
-      /^((?:(?:in|en)\s+)?(?:\d+(?:[.,]\d+)?\s*(?:weeks?|semanas?|days?|dias?|días?|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b[\s,]*(?:(?:and|y)\s+)?)+)/i,
+      /^((?:(?:in|en)\s+)?(?:\d+(?:[.,]\d+)?\s*(?:weeks?|w|semanas?|days?|dias?|días?|d|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b[\s,]*(?:(?:and|y)\s+)?)+)/i,
       /^(\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
       /^(\d{1,2}\s+(?:de\s+)?\w+\.?(?:\s+(?:de\s+)?\d{4})?[, ]+(?:(?:at|a las)\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i,
       /^([A-Z][a-z]{2,9}\.?\s+\d{1,2},?(?:\s+\d{4},?)?\s+(?:at\s+)?\d{1,2}:\d{2}(?:\s?(?:AM|PM))?)/i
@@ -590,12 +647,13 @@
 
   function parseResetAt(resetText, observedAt) {
     if (!Number.isFinite(observedAt)) return null;
-    const text = normalizeForMatch(resetText).trim().replace(/^(?:in|en|at|on|a las|el)\s+/, "");
+    const text = normalizeForMatch(resetText).trim().replace(/^(?:in|en|at|on|a las|el)\s+/, "")
+      .replace(/(\d)([wdhms])(?=\d)/g, "$1$2 ");
     if (/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:\d{2})?$/.test(text)) {
       const parsed = Date.parse(text);
       return Number.isFinite(parsed) ? parsed : null;
     }
-    const units = /(\d+(?:[.,]\d+)?)\s*(weeks?|semanas?|days?|dias?|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b/g;
+    const units = /(\d+(?:[.,]\d+)?)\s*(weeks?|w|semanas?|days?|dias?|d|hours?|horas?|hrs?|h|minutes?|minutos?|mins?|m|seconds?|segundos?|secs?|s)\b/g;
     const durations = [...text.matchAll(units)];
     if (durations.length && !text.replace(units, "").replace(/\b(?:and|y)\b/g, "").replace(/[\s,]/g, "")) {
       const durationMs = durations.reduce((total, [, amount, unit]) => {
@@ -719,6 +777,7 @@
     formatRelativeTime,
     formatTime,
     hasVisibleUsage,
+    isUsagePageUrl,
     matchesUsageTerms,
     mergeUsageFields,
     normalizeCounters,

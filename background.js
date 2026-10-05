@@ -5,7 +5,7 @@ const {
   refreshAlarmName,
   refreshPeriodMinutes: defaultRefreshPeriodMinutes
 } = ChatGPTUsageConfig;
-const CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics";
+const CODEX_ANALYTICS_URL = ChatGPTUsageConfig.usagePageUrl;
 const ANALYTICS_LOAD_TIMEOUT_MS = 8000;
 const ANALYTICS_READ_ATTEMPTS = 25;
 const ANALYTICS_READ_INTERVAL_MS = 400;
@@ -277,7 +277,7 @@ function refreshWithTimeout(reason) {
 }
 
 async function openCodexAnalyticsPage() {
-  const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  const tabs = await chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*"] });
   const existing = tabs.find((tab) => isCodexAnalyticsUrl(tab.url));
   if (existing) {
     await forgetRetainedSignInTab(existing.id);
@@ -1424,12 +1424,5 @@ async function withTimeout(
 }
 
 function isCodexAnalyticsUrl(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname === "chatgpt.com"
-      && parsed.pathname.toLowerCase().includes("/codex/")
-      && parsed.pathname.toLowerCase().includes("/settings/analytics");
-  } catch {
-    return false;
-  }
+  return ChatGPTUsageModel.isUsagePageUrl(url);
 }
