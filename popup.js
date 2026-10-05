@@ -302,20 +302,11 @@
 
   function renderCodexCards(snapshot) {
     const primaryLimits = document.getElementById("primaryLimits");
-    const secondaryLimits = document.getElementById("secondaryLimits");
     const totals = document.getElementById("totalsSection");
-    const has5hData = hasMetricData(snapshot, "codex5h");
     primaryLimits.textContent = "";
-    secondaryLimits.textContent = "";
     totals.textContent = "";
 
-    if (has5hData) {
-      appendMetric(primaryLimits, snapshot, "codex5h", "5h limit", "primary-metric");
-    }
     appendMetric(primaryLimits, snapshot, "codexWeekly", "Weekly limit", "primary-metric");
-    if (!has5hData) {
-      appendMetric(secondaryLimits, snapshot, "codex5h", "5h limit", "secondary-metric");
-    }
     appendMetric(totals, snapshot, "codexCredits", "Credits", "total-metric");
     appendMetric(totals, snapshot, "bankedResets", "Full resets banked", "total-metric");
   }
@@ -333,7 +324,7 @@
       ? renderMetricCard(field, fallbackTitle)
       : renderUnavailableCard(fallbackTitle);
     card.classList.add(className);
-    if ((key === "codex5h" || key === "codexWeekly") && hasMetricData(snapshot, key)) {
+    if (key === "codexWeekly" && hasMetricData(snapshot, key)) {
       const estimate = document.createElement("div");
       estimate.className = "metric-estimate";
       const structured = ChatGPTUsageModel.normalizeMetricField(field, fallbackTitle);
@@ -446,7 +437,6 @@
   function renderVisibleFields(snapshot) {
     if (!snapshot || !snapshot.usage) return "unavailable";
     const labels = {
-      codex5h: "5h",
       codexWeekly: "weekly",
       codexCredits: "credits",
       bankedResets: "full resets banked"

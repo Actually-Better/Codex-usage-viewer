@@ -4,6 +4,10 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.4.2 - 2026-10-05
+
+- Remove the 5-hour limit from the popup, including cached values and the unavailable placeholder. Keep the weekly limit full-width above credits and banked resets.
+
 ## 0.4.1 - 2026-10-05
 
 - Consolidate the existing 0.4.0 App Server probe, source contract, tests, and documentation into the main checkout alongside the web-reader correction.
