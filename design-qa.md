@@ -1,5 +1,7 @@
 # Design QA
 
+Historical report: these findings predate the removal of Spark and Other limits. During consolidation on 2026-10-05, the `.tmp/` artifacts below were archived in `/home/ramirogh/.codex/worktree-archives/codex-usage-viewer-20261005-180u8nq9/codex-usage-viewer.tar.gz` and removed from the working checkout. Paths below refer to files inside that archive's `codex-usage-viewer/` directory.
+
 ## Evidence
 
 - Source visual truth: `.tmp/redesign-selected-aligned-limits.png`

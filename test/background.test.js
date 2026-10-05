@@ -1659,7 +1659,7 @@ test("popup refresh opens a background Analytics tab and closes it after reading
   assert.equal(result.state.status, "usage-current");
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.createArgs[0].active, false);
-  assert.match(harness.calls.createArgs[0].url, /settings\/analytics/);
+  assert.equal(harness.calls.createArgs[0].url, "https://chatgpt.com/settings/usage?tab=overview");
   assert.equal(harness.calls.sendMessage, 13);
   assert.equal(harness.calls.remove, 1);
   assert.deepEqual(harness.calls.removedTabIds, [99]);
@@ -1930,7 +1930,7 @@ test("repeated logged-out refreshes reuse one retained background sign-in tab", 
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.remove, 0);
   assert.equal(
-    harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
+    harness.getOpenTabs().filter((tab) => /settings\/(?:analytics|usage)/.test(tab.url)).length,
     1
   );
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
@@ -1966,12 +1966,12 @@ test("automatic sign-in redirects remain owned and are returned to Analytics", a
   assert.equal(harness.calls.create, 1);
   assert.deepEqual(harness.calls.updateArgs, [{
     tabId: 99,
-    url: "https://chatgpt.com/codex/cloud/settings/analytics",
+    url: "https://chatgpt.com/settings/usage?tab=overview",
     active: false
   }]);
   assert.equal(harness.calls.remove, 0);
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 99);
-  assert.match(harness.getOpenTabs().find((tab) => tab.id === 99).url, /settings\/analytics/);
+  assert.equal(harness.getOpenTabs().find((tab) => tab.id === 99).url, "https://chatgpt.com/settings/usage?tab=overview");
 });
 
 test("a local tab ID from an earlier browser session is never trusted", async () => {
@@ -2226,7 +2226,7 @@ test("a popup joining an alarm keeps the older retained sign-in tab", async () =
   assert.deepEqual(harness.calls.removedTabIds, [99]);
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], 42);
   assert.equal(
-    harness.getOpenTabs().filter((tab) => /settings\/analytics/.test(tab.url)).length,
+    harness.getOpenTabs().filter((tab) => /settings\/(?:analytics|usage)/.test(tab.url)).length,
     1
   );
 });
@@ -2358,6 +2358,16 @@ test("Visit Analytics focuses an existing page instead of duplicating it", async
   assert.equal(harness.sessionStorage[ChatGPTUsageConfig.storageKeys.retainedSignInTab], null);
 });
 
+test("Visit Analytics reuses the new shared Usage page", async () => {
+  const harness = createBackgroundHarness({
+    tabs: [{ id: 42, windowId: 5, url: "https://chatgpt.com/settings/usage?tab=overview", active: false, status: "complete" }]
+  });
+  const result = await harness.run("openCodexAnalyticsPage()");
+  assert.equal(result.reused, true);
+  assert.equal(harness.calls.create, 0);
+  assert.deepEqual(harness.calls.updateArgs, [{ tabId: 42, active: true }]);
+});
+
 test("Visit Analytics creates a focused active page when none exists", async () => {
   const harness = createBackgroundHarness({
     tabs: [{ id: 17, windowId: 5, url: "https://chatgpt.com/c/ordinary-conversation", active: true, status: "complete" }]
@@ -2369,7 +2379,7 @@ test("Visit Analytics creates a focused active page when none exists", async () 
   assert.equal(result.reused, false);
   assert.equal(harness.calls.create, 1);
   assert.equal(harness.calls.createArgs[0].active, true);
-  assert.match(harness.calls.createArgs[0].url, /settings\/analytics/);
+  assert.equal(harness.calls.createArgs[0].url, "https://chatgpt.com/settings/usage?tab=overview");
   assert.deepEqual(harness.getOpenTabs().filter((tab) => tab.active).map((tab) => tab.id), [99]);
 });
 

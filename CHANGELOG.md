@@ -4,6 +4,23 @@ All notable user-facing changes are documented here.
 
 ## Unreleased
 
+## 0.4.2 - 2026-10-05
+
+- Remove the 5-hour limit from the popup, including cached values and the unavailable placeholder. Keep the weekly limit full-width above credits and banked resets.
+
+## 0.4.1 - 2026-10-05
+
+- Consolidate the existing 0.4.0 App Server probe, source contract, tests, and documentation into the main checkout alongside the web-reader correction.
+- Refresh from the shared ChatGPT Usage overview at `/settings/usage?tab=overview`, while continuing to recognize legacy Codex Analytics and Usage routes.
+- Read reset deadlines displayed before percentages, compact day/hour countdowns, leading credit balances with thousands separators, and the Available reset count, including zero without counting reset history.
+- Keep each limit's reset separate from adjacent cards and leave absent 5-hour limits unavailable.
+
+## 0.4.0 — 2026-09-15
+
+- Add an opt-in, read-only Codex App Server diagnostic probe and a versioned usage source contract for the upcoming local connection.
+- Normalize quota windows, credits, reset expirations and daily tokens without exposing account identifiers or inventing missing data.
+- Keep Analytics as the popup source while workspace identity and native browser integration are validated.
+
 ## 0.3.4 - 2026-09-14
 
 - Show an unavailable 5-hour limit as a compact row below the full-width weekly limit, without a disclosure. Keep available limits side by side.

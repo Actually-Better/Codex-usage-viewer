@@ -24,7 +24,6 @@ test("account metadata has no redundant ChatGPT section heading", () => {
 
 test("metrics are grouped into primary limits and totals", () => {
   const orderedKeys = [
-    "codex5h",
     "codexWeekly",
     "codexCredits",
     "bankedResets"
@@ -42,16 +41,14 @@ test("metrics are grouped into primary limits and totals", () => {
   assert.match(popupHtml, /id="totalsSection" class="totals-list"/);
 });
 
-test("an empty 5-hour limit is shown in a direct row below Weekly", () => {
+test("only the weekly limit is rendered, with no secondary placeholder", () => {
   const renderer = popupSource.slice(
     popupSource.indexOf("function renderCodexCards"),
     popupSource.indexOf("function hasMetricData")
   );
 
-  assert.doesNotMatch(renderer, /codexSpark|otherLimits/);
-  assert.match(renderer, /if \(has5hData\)\s*{\s*appendMetric\(primaryLimits, snapshot, "codex5h"/);
-  assert.match(renderer, /if \(!has5hData\)\s*{\s*appendMetric\(secondaryLimits, snapshot, "codex5h"/);
-  assert.match(popupHtml, /id="primaryLimits"[^>]*><\/div>\s*<div id="secondaryLimits"/);
+  assert.doesNotMatch(renderer, /codex5h|codexSpark|otherLimits|secondaryLimits/);
+  assert.doesNotMatch(popupHtml, /secondary-limits|secondaryLimits/);
   assert.match(renderer, /appendMetric\(primaryLimits, snapshot, "codexWeekly"/);
 });
 
